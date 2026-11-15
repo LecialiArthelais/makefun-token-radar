@@ -151,6 +151,7 @@ export interface RadarData {
   model: ModelConstants;
   model_version: string;
   watchlist_size: number;
+  watchlist: string[];
   board_size: number;
   early_size: number;
   live_size: number;
@@ -303,7 +304,9 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     age_days: s.age,
     implied_value_usd: s.implied,
     model: {
-      category_multiple: round4(s.categoryMultiple),
+      // Full precision, not rounded: the dashboard recomputes this row from the
+      // same figure, and a rounded multiple would drift the dollar by a few.
+      category_multiple: s.categoryMultiple,
       growth_pct: s.growthPct,
       growth_multiplier: round4(s.growthMult),
       maturity_multiplier: round4(s.maturityMult),
@@ -460,6 +463,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     model,
     model_version: MODEL_VERSION,
     watchlist_size: snapshot.watchlist.length,
+    watchlist: snapshot.watchlist,
     board_size: board.length,
     early_size: early,
     live_size: live.length,
