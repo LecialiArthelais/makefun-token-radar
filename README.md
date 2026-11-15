@@ -1,10 +1,10 @@
-# SONAR — Token Radar
+# D Sonar — Token Radar
 
 [![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 [![rank](https://make.fun/badge/token-radar-01/LecialiArthelais/makefun-token-radar/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 [![reward](https://make.fun/badge/token-radar-01/LecialiArthelais/makefun-token-radar/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
 
-SONAR is a token launch radar: it scans 758 protocols and ranks the ones with
+D Sonar is a token launch radar: it scans 758 protocols and ranks the ones with
 no token on record by what their token would be worth — from the protocol's
 own TVL, its seven-day growth, and how long it has run without a token. Every
 row carries a farm plan: what to do, what it costs, and how long it takes.
@@ -30,7 +30,7 @@ by implied value. The 24 largest live-token protocols sit in their own view,
 with their real market caps — the market's own values, never mixed into the
 ranking.
 
-Implied value is SONAR's claim, not a prediction of whether or when a token
+Implied value is D Sonar's claim, not a prediction of whether or when a token
 is issued, and not financial advice.
 
 ## Run it

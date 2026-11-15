@@ -1,4 +1,4 @@
-// SONAR's signal model: one sealed snapshot in, one ranked board out.
+// D Sonar's signal model: one sealed snapshot in, one ranked board out.
 //
 // The board ranks pre-token protocols by what their token would be worth if the
 // protocol's record stayed as it is. The value is not a prediction of a launch;

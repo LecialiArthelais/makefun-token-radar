@@ -1,4 +1,4 @@
-// SONAR's dashboard. It reads window.RADAR (written beside dashboard/ by
+// D Sonar's dashboard. It reads window.RADAR (written beside dashboard/ by
 // main.ts) and renders the hero stats, the top-three spotlight, the filterable
 // board, the live-token view, the model section, and a detail drawer for every
 // protocol with the model's own inputs and the protocol's farm plan.

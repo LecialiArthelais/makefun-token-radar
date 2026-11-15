@@ -1,4 +1,4 @@
-// SONAR — the token launch radar (Node 22, standard library only).
+// D Sonar — the token launch radar (Node 22, standard library only).
 //
 // main.ts reads the sealed snapshot from /input/snapshot.json (or --input
 // <file|dir>), scores every pre-token protocol with the signal model in
