@@ -64,7 +64,7 @@ button { cursor: pointer; }
   color: var(--accent); margin-bottom: var(--s3);
 }
 .lede { color: var(--muted); font-size: 17px; max-width: 68ch; margin-top: var(--s4); }
-.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s3); margin-top: var(--s6); }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s3); margin-top: var(--s6); }
 .stat {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card);
   padding: var(--s4) var(--s5); display: grid; gap: 2px;
@@ -156,9 +156,22 @@ tr.top3 .rank-dot { background: var(--accent); color: #FFFFFF; }
 .button { min-height: 40px; padding: 0 var(--s5); border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface); font-weight: 600; }
 .button.primary { background: var(--accent); border-color: var(--accent); color: #FFFFFF; }
 
+/* Validation strip — the out-of-sample numbers, above the board */
+.validation-strip {
+  margin-top: var(--s3); padding: var(--s4) var(--s5);
+  background: var(--accent-soft); border: 1px solid var(--border);
+  border-radius: var(--radius-card); font-size: 13px; line-height: 1.6; color: var(--ink);
+}
+.validation-strip b { font-family: var(--font-num); }
+.validation-strip .v-label {
+  display: block; font-size: 11px; font-weight: 700; letter-spacing: 0.18em;
+  text-transform: uppercase; color: var(--accent-deep); margin-bottom: 2px;
+}
+
 /* Model */
 .model { margin-top: var(--s4); padding: var(--s6); display: grid; gap: var(--s4); }
 .model h2 { font-size: 22px; }
+.model h3 { font-size: 16px; margin-top: var(--s2); }
 .formula {
   font-family: var(--font-num); font-size: 13px; line-height: 1.8; color: var(--muted);
   background: var(--canvas); border: 1px solid var(--border); border-radius: var(--radius-card);
@@ -172,6 +185,10 @@ tr.top3 .rank-dot { background: var(--accent); color: #FFFFFF; }
 }
 .mult b { font-family: var(--font-num); color: var(--accent-deep); }
 .mult span { color: var(--muted); }
+.mini-table { overflow-x: auto; }
+.mini-table table { font-size: 13px; }
+.mini-table th, .mini-table td { padding: var(--s2) var(--s3); }
+.mini-table td.num, .mini-table th.num { text-align: right; }
 
 /* Detail drawer */
 .detail {
@@ -197,6 +214,17 @@ tr.top3 .rank-dot { background: var(--accent); color: #FFFFFF; }
 .steps b { display: block; font-weight: 600; }
 .cost { color: var(--muted); font-size: 12px; font-family: var(--font-num); }
 .match { margin-top: var(--s3); font-size: 13px; color: var(--accent-deep); font-weight: 600; }
+.rating {
+  display: inline-grid; place-items: center; min-width: 34px; height: 34px;
+  border-radius: 50%; font-family: var(--font-num); font-size: 15px; font-weight: 700;
+  background: var(--accent-soft); color: var(--accent-deep);
+}
+.rating.a { background: var(--accent); color: #FFFFFF; }
+.rating.b { background: var(--accent-soft); color: var(--accent-deep); }
+.rating.skip { background: #FEE2E2; color: var(--negative); }
+.econ-head { display: flex; align-items: center; gap: var(--s3); margin-bottom: var(--s2); }
+.econ-head b { display: block; font-size: 16px; }
+.econ-head span { display: block; color: var(--muted); font-size: 13px; }
 
 /* Footer */
 .foot { margin-top: var(--s6); padding-top: var(--s5); border-top: 1px solid var(--border); display: grid; gap: var(--s2); }

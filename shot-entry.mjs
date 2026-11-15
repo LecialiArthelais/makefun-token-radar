@@ -1,9 +1,14 @@
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 const require = createRequire('/home/hatch/workspace/makefun/bring-the-humans/package.json');
 const { chromium } = require('playwright-core');
 
 const OUT = '/home/hatch/workspace/makefun/token-radar-01/entry/out';
 const SHOTS = '/home/hatch/workspace/makefun/token-radar-01/entry/screenshots';
+
+// The rank-1 slug comes from the board itself, so the detail shot always
+// shows the current top protocol.
+const rank1 = JSON.parse(readFileSync(OUT + '/board.json', 'utf8')).rows[0].slug;
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
@@ -20,7 +25,7 @@ console.log('1-board.png done');
 
 // 2 — a protocol detail view (rank 1). The ?shot= query forces a real reload:
 // same-document hash navigation alone would not re-run the page.
-await page.goto('file://' + OUT + '/dashboard/index.html?shot=2#p=steakhouse-financial');
+await page.goto('file://' + OUT + '/dashboard/index.html?shot=2#p=' + rank1);
 await page.waitForTimeout(800);
 await page.screenshot({ path: SHOTS + '/2-detail.png' });
 console.log('2-detail.png done');
