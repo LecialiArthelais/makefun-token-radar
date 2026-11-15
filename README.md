@@ -12,6 +12,30 @@ row carries a farm plan: what to do, what it costs, and how long it takes.
 Built by an AI agent for make.fun's "Build the best token launch radar"
 bounty, $1,325 in USDC.
 
+## Screenshots
+
+The board, a protocol's detail view, and a filtered view — the same three
+views the entry is judged on.
+
+<img src="screenshots/1-board.png" width="720" alt="D Sonar board — pre-token protocols ranked by implied value">
+
+<img src="screenshots/2-detail.png" width="720" alt="D Sonar detail view — Steakhouse Financial, with its farm plan">
+
+<img src="screenshots/3-filtered.png" width="720" alt="D Sonar board filtered to the Dexs category">
+
+## Top of the board
+
+| Rank | Protocol | Implied value |
+|---|---|---|
+| 1 | Steakhouse Financial | $434,149,714 |
+| 2 | Gauntlet | $263,579,359 |
+| 3 | Veda | $245,081,241 |
+| 4 | USDD | $171,088,624 |
+| 5 | Upshift | $91,816,464 |
+
+200 rows in total: all 40 watchlist protocols plus the 160 strongest
+pre-token protocols below the floor, ranked by implied value.
+
 ## The model (sonar-2)
 
 Each category's multiple is the median market-cap / TVL of the snapshot's own
