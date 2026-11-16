@@ -221,7 +221,10 @@ tr.top3 .rank-dot { background: var(--accent); color: #FFFFFF; }
 }
 .rating.a { background: var(--accent); color: #FFFFFF; }
 .rating.b { background: var(--accent-soft); color: var(--accent-deep); }
-.rating.skip { background: #FEE2E2; color: var(--negative); }
+.rating.skip-r { background: #FEE2E2; color: var(--negative); box-shadow: inset 0 0 0 1px #FCA5A5; }
+.farm-cell { display: flex; align-items: center; gap: var(--s2); white-space: nowrap; }
+.farm-cell .rating { min-width: 0; width: auto; height: 22px; padding: 0 8px; border-radius: 999px; font-size: 12px; }
+.farm-cell .num { font-family: var(--font-num); font-size: 13px; font-weight: 600; }
 .econ-head { display: flex; align-items: center; gap: var(--s3); margin-bottom: var(--s2); }
 .econ-head b { display: block; font-size: 16px; }
 .econ-head span { display: block; color: var(--muted); font-size: 13px; }

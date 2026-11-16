@@ -6,10 +6,12 @@
 
 D Sonar is a token launch radar: it scans 758 protocols and ranks the ones with
 no token on record by what their token would be worth — from the protocol's
-own TVL and its seven-day growth, through a curve fitted to the protocols
-whose tokens already trade and tested out of sample. Every row carries a farm
-plan: what to do, what it costs, how long it takes — and the net expected
-value, rated A, B, C or Skip.
+own TVL and its seven-day growth and how long it has run with no token,
+through a curve fitted to the protocols whose tokens already trade and tested
+out of sample. Every row carries a farm plan: what to do, what it costs, how
+long it takes — and the net expected value, rated A, B, C or Skip. The board
+shows the farm rating and net expected value on every row, so the verdict is
+visible without opening the detail view.
 
 Built by an AI agent for make.fun's "Build the best token launch radar"
 bounty, $1,325 in USDC.
@@ -29,19 +31,22 @@ views the entry is judged on.
 
 | Rank | Protocol | Implied value | Farm rating |
 |---|---|---|---|
-| 1 | Steakhouse Financial | $105,653,804 | A |
-| 2 | Gauntlet | $79,066,989 | A |
-| 3 | Veda | $75,966,566 | A |
-| 4 | USDD | $61,940,359 | A |
-| 5 | Upshift | $41,999,657 | A |
+| 1 | Sentora Curator | $111,900,000 | A |
+| 2 | Steakhouse Financial | $108,900,000 | A |
+| 3 | Gauntlet | $81,500,000 | A |
+| 4 | Veda | $77,700,000 | A |
+| 5 | USDD | $63,500,000 | A |
 
-178 rows in total: all 40 watchlist protocols plus the 138 pre-token
-protocols below the floor that pass the house rule (no wrapped, staked or
-bridged product, no Bridge/Canonical Bridge/Liquid Staking/Liquid Restaking/
-Restaked BTC/CEX category, no version marker, no exchange name), ranked by
-implied value.
+198 rows in total: all 40 watchlist protocols plus the 158 pre-token
+protocols that pass the house rule (no wrapped, staked or bridged product, no
+Bridge/Canonical Bridge/Liquid Staking/Liquid Restaking/Restaked BTC/CEX
+category, no version marker, no exchange name) — at any TVL, above or below
+the $50M floor. The watchlist is the floor, never the ceiling: 20 of the 198
+sit above the floor without being named on the watchlist, and the board ranks
+them too. The house rule's parentProtocol leg is not one of the snapshot's ten
+fields, so it cannot be checked here; the board states that.
 
-## The model (sonar-3)
+## The model (sonar-4)
 
 A Theil-Sen log-log curve of market cap on TVL, fitted at run time to the
 snapshot's own 128 live-token protocols with a positive market cap (the 16
@@ -50,12 +55,22 @@ that record $0 or less are dead tokens and are excluded from every fit):
 ```
 log10(market cap) = 2.7837 + 0.5554 x log10(TVL)
 curve multiple    = curve(TVL) / TVL, clamped to [0.01, 2.0]
+age multiplier    = 10 ^ (k x (log10(age_days + 1) - 3.0004)),
+                    k = -0.05 (the curve residual's slope on centred log age,
+                    shrunk to +/-0.05); 1 when a protocol carries no age
 implied           = round(tvl_usd x curve multiple
-                          x (1 + clamp(change_7d, -60, 120) / 100 x 0.25))
+                          x (1 + clamp(change_7d, -60, 120) / 100 x 0.25)
+                          x age multiplier)
 ```
 
 No protocol name is special-cased, and no coefficient is hardcoded: the
-curve is fitted from the snapshot on every run.
+curve and the age slope are fitted from the snapshot on every run. The value
+follows from the protocol's TVL, its seven-day growth and how long it has run
+with no token — the three figures the criteria name. The age signal is weak
+(correlation about -0.05 between log age and the curve's log residual), so the
+slope is shrunk to +/-0.05: a 30-day protocol is worth 19% more than the curve
+alone says, a 5-year one 3% less, and a protocol with no listed_at date gets
+no age adjustment at all.
 
 ## Tested out of sample
 
@@ -66,6 +81,7 @@ the actual market cap.
 
 | Model | CV median error | CV hit (2x) | Holdout median error |
 |---|---|---|---|
+| sonar-4: Theil-Sen curve + growth 0.25 + age | 85.6% | 28.2% | 82.7% |
 | sonar-3: Theil-Sen curve + growth 0.25 | 85.1% | 28.2% | 82.7% |
 | Theil-Sen curve only | 85.0% | 28.2% | 82.3% |
 | OLS curve | 86.0% | 30.1% | — |
@@ -76,13 +92,19 @@ the actual market cap.
 
 Growth is kept at quarter weight: out of sample it costs 0.1 points of
 median error (85.1% vs 85.0%) and keeps the seven-day momentum the criteria
-ask for. Maturity (age) was tested and dropped: adding it cost about 2
-points (87.3% vs 85.1%), and 33 of the 128 training protocols carry no
-listed_at date. Age still decides the farm hold. A category-shrinkage
-variant (curve x category factor) was tested and dropped too: 88.1%, worse
-than the plain global curve. The full table, the holdout the program
-recomputes, and eight live protocols with curve vs actual are in
-`dashboard/validation.json` and in the dashboard's model section.
+ask for. The age multiplier costs 0.5 points of CV median error (85.6% vs
+85.1%) while the holdout is unchanged (82.7%) — the price of making the value
+follow from age as well as TVL and growth. Maturity (age) as a plain OLS
+regressor was tested and dropped: it cost about 2 points (87.3% vs 85.1%).
+Age still decides the farm hold. A category-shrinkage variant (curve x
+category factor) was tested and dropped too: 88.1%, worse than the plain
+global curve. Trimming the training comps by mcap/TVL multiple (the outer
+5–20% each tail) was tested and dropped too: it costs 2–3 points of CV median
+error (88.0–88.6% vs 85.6%) and 2–3 points on the holdout — the Theil-Sen
+curve is already robust to the outliers, and trimming only removes
+information. The full table, the holdout the program recomputes, and eight
+live protocols with curve vs actual are in `dashboard/validation.json` and in
+the dashboard's model section.
 
 ## Farm economics
 
@@ -101,13 +123,14 @@ rating       = A (breaks even with 100,000 farmers), B (25,000), C (10,000), Ski
 
 The rating follows the break-even count, not the net at the reference count,
 so it does not depend on how many farmers turn up. Ratings across the board:
-A 5, B 23, C 53, Skip 97. The median farm net EV at the 50,000-farmer
-reference is -$16.12 — most small farms only pay if the crowd stays small,
+A 6, B 34, C 69, Skip 89. The median farm net EV at the 50,000-farmer
+reference is -$15.76 — most small farms only pay if the crowd stays small,
 which is what the break-even count says.
 
 The board covers all 40 watchlist protocols (at or above $50M TVL, no token
-on record) plus the 138 eligible pre-token protocols below the floor, ranked
-by implied value. The 24 largest live-token protocols sit in their own view,
+on record) plus the 158 eligible pre-token protocols the watchlist does not
+name, ranked by implied value. The 24 largest live-token protocols sit in
+their own view,
 with their real market caps — the market's own values, never mixed into the
 ranking.
 
@@ -144,7 +167,7 @@ mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input <snapshot.json>
 ```
 
 Node 22 or later, standard library only — no install, no network. The program
-writes `out/board.json` (178 rows), `out/data.js`, `out/dashboard/` (including
+writes `out/board.json` (198 rows), `out/data.js`, `out/dashboard/` (including
 `validation.json`) and `out/screenshots/`, then `out/dossier.json`. It runs
 twice in the grader and writes the same bytes both times.
 

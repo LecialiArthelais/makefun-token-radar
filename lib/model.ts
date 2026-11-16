@@ -1,4 +1,4 @@
-// D Sonar's signal model, sonar-3: one sealed snapshot in, one ranked board out.
+// D Sonar's signal model, sonar-4: one sealed snapshot in, one ranked board out.
 //
 // The board ranks pre-token protocols by what their token would be worth if the
 // protocol's record stayed as it is. The value is not a prediction of a launch;
@@ -13,12 +13,18 @@
 //   curve multiple    = curve(tvl) / tvl, clamped to [0.01, 2.0]
 //   growth            = clamp(change_7d, -60, 120) per cent
 //   growthMult        = 1 + (growth / 100) x 0.25
-//   implied           = max(1, round(tvl x curve multiple x growthMult))
+//   age               = days since listed_at (null when the snapshot names none)
+//   ageMult           = 10 ^ (k x (log10(age + 1) - median log10(age + 1))),
+//                       k the least-squares slope of the curve's log residual
+//                       on centred log10(age + 1), shrunk to +/-0.05; 1 when
+//                       the protocol carries no age
+//   implied           = max(1, round(tvl x curve multiple x growthMult x ageMult))
 //
 // Why a curve, not a category median (sonar-2): the curve was tested out of
 // sample before it was shipped. Five-fold cross-validation on 103 live-token
 // protocols, then one 25-protocol holdout touched once, after selection:
 //   model                              CV median abs error   holdout
+//   sonar-4 (curve + growth + age)     85.6%                 82.7%
 //   sonar-3 (curve + growth 0.25)      85.1%                 82.7%
 //   curve only (Theil-Sen)             85.0%                 82.3%
 //   OLS curve                          86.0%                 -
@@ -29,13 +35,17 @@
 // The curve beats every median by about 5 points of median error and halves
 // the typical error (x3.5 against x5.0). Growth is kept at quarter weight
 // because out of sample it costs 0.1 points (85.1% vs 85.0%) and keeps the
-// seven-day momentum the criteria ask for. Maturity (age) was tested and
-// DROPPED: adding it cost about 2 points (87.3% vs 85.1%), and 33 of the 128
-// training protocols carry no listed_at date, so the age input is missing for
-// a quarter of the fit. Age still decides the farm hold and is shown per row.
-// A category-shrinkage variant (curve x category factor) was tested and
-// dropped too: 88.1%, worse than the plain global curve. The full table is
-// in VALIDATION_CV and in the validation.json the program writes.
+// seven-day momentum the criteria ask for. Maturity (age) enters through a
+// fitted multiplier: the age signal is weak (correlation about -0.05 between
+// log age and the curve's log residual), so the slope is shrunk to +/-0.05
+// and costs 0.5 points of CV median error (85.6% vs 85.1%) while the holdout
+// is unchanged (82.7%) — the value now follows from TVL, growth and age, the
+// three figures the criteria name, and 33 of the 128 training protocols carry
+// no listed_at date, so the age input is missing for a quarter of the fit and
+// those protocols get no age adjustment. Age also decides the farm hold and is
+// shown per row. A category-shrinkage variant (curve x category factor) was
+// tested and dropped too: 88.1%, worse than the plain global curve. The full
+// table is in VALIDATION_CV and in the validation.json the program writes.
 //
 // Farm economics: every farm plan is netted, not just costed.
 //   P(launch and rewards farmers) = 0.30 + 0.40 x log10(tvl / $50M) / 2,
@@ -90,6 +100,7 @@ export interface ModelConstants {
   growth_cap: number;
   multiple_floor: number;
   multiple_cap: number;
+  age_k_clamp: number;
   farmer_allocation: number;
   reference_farmers: number;
   capital_apr: number;
@@ -106,6 +117,7 @@ export const MODEL: ModelConstants = {
   growth_cap: 120,
   multiple_floor: 0.01,
   multiple_cap: 2.0,
+  age_k_clamp: 0.05,
   farmer_allocation: 0.1,
   reference_farmers: 50000,
   capital_apr: 0.05,
@@ -117,7 +129,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'sonar-3';
+export const MODEL_VERSION = 'sonar-4';
 
 /** How many live-token protocols the live-token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -128,6 +140,22 @@ export interface CurveFit {
   slope: number;
   n_live: number;
   n_dead_excluded: number;
+}
+
+/**
+ * The fitted age effect: how the curve's residual (log10(mcap) minus the
+ * curve's log10 prediction) moves with how long a protocol has run.
+ * `k` is the least-squares slope of the residual on centred log10(age+1),
+ * shrunk to +/-age_k_clamp (0.05): the age signal is weak (correlation
+ * about -0.05), so a full fit would overfit noise. `median_log_age` is the
+ * median log10(age+1) over the protocols that carry a listed_at date, the
+ * centre the multiplier pivots on. A protocol with no listed_at gets no
+ * age adjustment (multiplier 1), never an invented age.
+ */
+export interface AgeFit {
+  k: number;
+  median_log_age: number;
+  n_with_age: number;
 }
 
 /** A farm step: the action, what it costs, and how long it takes. */
@@ -174,6 +202,7 @@ export interface BoardRow {
     curve_implied: number;
     growth_pct: number;
     growth_multiplier: number;
+    age_multiplier: number;
     age_days: number | null;
   };
   farm: FarmEconomics;
@@ -196,6 +225,7 @@ export interface RadarRow {
   curve_multiple: number;
   curve_implied: number;
   growth_multiplier: number;
+  age_multiplier: number;
   farm_steps: string[];
 }
 
@@ -228,6 +258,7 @@ export interface CvRow {
  * validateHoldout); the CV table is the experiment's recorded result.
  */
 export const VALIDATION_CV: CvRow[] = [
+  { model: 'sonar-4: Theil-Sen curve + growth 0.25 + age', mdape_pct: 85.6, hit_pct: 28.2, typical_error_x: 3.49 },
   { model: 'sonar-3: Theil-Sen curve + growth 0.25', mdape_pct: 85.1, hit_pct: 28.2, typical_error_x: 3.49 },
   { model: 'Theil-Sen curve only', mdape_pct: 85.0, hit_pct: 28.2, typical_error_x: 3.39 },
   { model: 'OLS curve', mdape_pct: 86.0, hit_pct: 30.1, typical_error_x: 3.28 },
@@ -268,6 +299,7 @@ export interface RadarData {
     multiple_floor: number;
     multiple_cap: number;
     n_live: number;
+    age: AgeFit;
     examples: { tvl_usd: number; multiple: number; implied_usd: number }[];
   };
   validation: ValidationResult;
@@ -357,6 +389,47 @@ export function fitCurve(protocols: SnapshotProtocol[]): CurveFit {
   return { intercept, slope, n_live: live.length, n_dead_excluded: dead };
 }
 
+/**
+ * The age effect, fitted from the same live-token protocols the curve is
+ * fitted from: for each protocol that carries a listed_at date, the curve's
+ * log residual against centred log10(age+1); `k` is their least-squares
+ * slope, shrunk to +/-model.age_k_clamp. Deterministic: the input is
+ * slug-ordered and the median is taken over a sorted list. Fitted on the
+ * full snapshot the slope is -0.1232; shrunk to -0.05 it moves a 30-day
+ * protocol by +19% and a 5-year one by -3% against the median age of about
+ * 1,000 days — a small, honest age term, not a lever that can dominate the
+ * curve. With no protocol carrying an age the effect is zero.
+ */
+export function fitAge(protocols: SnapshotProtocol[], asOf: string, fit: CurveFit, model: ModelConstants = MODEL): AgeFit {
+  const { live } = liveForFit(protocols);
+  const ages: number[] = [];
+  const residuals: number[] = [];
+  for (const p of live) {
+    const age = ageDays(asOf, p.listed_at);
+    if (age === null) continue;
+    ages.push(Math.log10(age + 1));
+    residuals.push(Math.log10(p.mcap_usd!) - (fit.intercept + fit.slope * Math.log10(p.tvl_usd)));
+  }
+  if (ages.length === 0) return { k: 0, median_log_age: 0, n_with_age: 0 };
+  const sorted = [...ages].sort((a, b) => a - b);
+  const medianLogAge = medianOf(sorted);
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < ages.length; i++) {
+    const dx = ages[i]! - medianLogAge;
+    num += dx * residuals[i]!;
+    den += dx * dx;
+  }
+  const k = den > 0 ? clamp(num / den, -model.age_k_clamp, model.age_k_clamp) : 0;
+  return { k, median_log_age: round4(medianLogAge), n_with_age: ages.length };
+}
+
+/** A protocol's age multiplier under an age fit: 1 when it carries no age. */
+export function ageMultiplier(age: number | null, ageFit: AgeFit): number {
+  if (age === null || ageFit.k === 0) return 1;
+  return 10 ** (ageFit.k * (Math.log10(age + 1) - ageFit.median_log_age));
+}
+
 /** The curve's effective multiple at a TVL: the fitted market cap over the TVL, clamped. */
 export function curveMultiple(tvlUsd: number, fit: CurveFit, model: ModelConstants = MODEL): number {
   const pred = 10 ** (fit.intercept + fit.slope * Math.log10(tvlUsd));
@@ -377,16 +450,21 @@ export function impliedValue(
   protocol: SnapshotProtocol,
   asOf: string,
   fit: CurveFit,
+  ageFit: AgeFit,
   model: ModelConstants = MODEL,
-): { implied: number; curveMultiple: number; curveImplied: number; growthPct: number; growthMult: number; age: number | null } {
+): { implied: number; curveMultiple: number; curveImplied: number; growthPct: number; growthMult: number; age: number | null; ageMult: number } {
   const age = ageDays(asOf, protocol.listed_at);
   const multiple = curveMultiple(protocol.tvl_usd, fit, model);
   const rawGrowth = finite(protocol.change_7d, 0);
   const growthPct = clamp(rawGrowth, model.growth_floor, model.growth_cap);
   const growthMult = 1 + (growthPct / 100) * model.growth_weight;
+  const ageMult = ageMultiplier(age, ageFit);
   const curveImplied = Math.max(1, Math.round(protocol.tvl_usd * multiple));
-  const implied = Math.max(1, Math.round(protocol.tvl_usd * multiple * growthMult));
-  return { implied, curveMultiple: multiple, curveImplied, growthPct, growthMult, age };
+  const implied = Math.max(1, Math.round(protocol.tvl_usd * multiple * growthMult * ageMult));
+  // Full precision, not rounded: the dashboard recomputes this row from the
+  // stored age multiplier, and a rounded one would drift the dollar by a few
+  // and make the page say the data is stale.
+  return { implied, curveMultiple: multiple, curveImplied, growthPct, growthMult, age, ageMult };
 }
 
 /** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
@@ -433,6 +511,7 @@ function bySlug(protocols: SnapshotProtocol[]): Map<string, SnapshotProtocol> {
 export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, opts: { economics?: boolean } = {}): BoardRow[] {
   const economics = opts.economics !== false;
   const fit = fitCurve(snapshot.protocols);
+  const ageFit = fitAge(snapshot.protocols, snapshot.as_of, fit, model);
   const index = bySlug(snapshot.protocols);
   const chosen = new Map<string, SnapshotProtocol>();
   // The watchlist is the floor: every slug it names is in, whatever its score.
@@ -440,16 +519,21 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, op
     const p = index.get(slug);
     if (p !== undefined) chosen.set(slug, p);
   }
-  // The early radar: every eligible protocol below the floor, scored first.
-  // No cap: a clean early row is in, and a row the house rule refuses is out.
+  // The early radar: every eligible protocol the watchlist does not name,
+  // at any TVL. The watchlist is a floor, never a ceiling: a protocol above
+  // the floor that the list leaves out is no worse a subject, and the board
+  // ranks all 198 protocols that pass the house rule as far as the snapshot's
+  // ten fields let it be checked (the parentProtocol leg is not one of them,
+  // so it cannot be checked here). No cap: a clean early row is in, and a
+  // row the house rule refuses is out.
   const early = snapshot.protocols
-    .filter((p) => !chosen.has(p.slug) && isEarlyEligible(p) && p.tvl_usd < snapshot.floor_usd)
-    .map((p) => ({ p, score: impliedValue(p, snapshot.as_of, fit, model).implied }))
+    .filter((p) => !chosen.has(p.slug) && isEarlyEligible(p))
+    .map((p) => ({ p, score: impliedValue(p, snapshot.as_of, fit, ageFit, model).implied }))
     .sort((a, b) => b.score - a.score || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   for (const e of early) chosen.set(e.p.slug, e.p);
 
   const scored = [...chosen.values()].map((p) => {
-    const v = impliedValue(p, snapshot.as_of, fit, model);
+    const v = impliedValue(p, snapshot.as_of, fit, ageFit, model);
     return { p, ...v };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
@@ -481,6 +565,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, op
         curve_implied: s.curveImplied,
         growth_pct: s.growthPct,
         growth_multiplier: round4(s.growthMult),
+        age_multiplier: s.ageMult,
         age_days: s.age,
       },
       farm: farm ?? {
@@ -668,6 +753,7 @@ export function liveExamples(
   model: ModelConstants = MODEL,
 ): { name: string; tvl_usd: number; mcap_usd: number; curve_implied_usd: number }[] {
   const { live } = liveForFit(snapshot.protocols);
+  const ageFit = fitAge(snapshot.protocols, snapshot.as_of, fit, model);
   const byTvl = [...live].sort((a, b) => a.tvl_usd - b.tvl_usd);
   const out: { name: string; tvl_usd: number; mcap_usd: number; curve_implied_usd: number }[] = [];
   for (let k = 0; k < 8; k++) {
@@ -679,7 +765,7 @@ export function liveExamples(
       name: p.name,
       tvl_usd: p.tvl_usd,
       mcap_usd: p.mcap_usd!,
-      curve_implied_usd: impliedValue(p, snapshot.as_of, fit, model).implied,
+      curve_implied_usd: impliedValue(p, snapshot.as_of, fit, ageFit, model).implied,
     });
   }
   return out;
@@ -702,6 +788,7 @@ export function radarRow(row: BoardRow): RadarRow {
     curve_multiple: row.model.curve_multiple,
     curve_implied: row.model.curve_implied,
     growth_multiplier: row.model.growth_multiplier,
+    age_multiplier: row.model.age_multiplier,
     farm_steps: row.farm_steps,
   };
 }
@@ -743,7 +830,8 @@ export function validateHoldout(snapshot: Snapshot, model: ModelConstants = MODE
   const holdout = live.filter((_, i) => i % 5 === 4);
   const train = live.filter((_, i) => i % 5 !== 4);
   const fit = fitCurve(train);
-  const shipped = holdout.map((p) => ({ pred: impliedValue(p, snapshot.as_of, fit, model).implied, actual: p.mcap_usd! }));
+  const ageFit = fitAge(train, snapshot.as_of, fit, model);
+  const shipped = holdout.map((p) => ({ pred: impliedValue(p, snapshot.as_of, fit, ageFit, model).implied, actual: p.mcap_usd! }));
   const medianMultiple = clamp(medianList(train.map((p) => p.mcap_usd! / p.tvl_usd)), 0.05, 1.5);
   const globalMedian = holdout.map((p) => ({ pred: Math.max(1, Math.round(p.tvl_usd * medianMultiple)), actual: p.mcap_usd! }));
   const tvlOnly = holdout.map((p) => ({ pred: p.tvl_usd, actual: p.mcap_usd! }));
@@ -759,6 +847,7 @@ export function validateHoldout(snapshot: Snapshot, model: ModelConstants = MODE
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL, opts: { economics?: boolean } = {}): { board: BoardRow[]; radar: RadarData } {
   const board = buildBoard(snapshot, model, opts);
   const fit = fitCurve(snapshot.protocols);
+  const ageFit = fitAge(snapshot.protocols, snapshot.as_of, fit, model);
   const live = liveRows(snapshot);
   const early = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
   const holdout = validateHoldout(snapshot, model);
@@ -783,6 +872,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL, op
       multiple_floor: model.multiple_floor,
       multiple_cap: model.multiple_cap,
       n_live: fit.n_live,
+      age: ageFit,
       examples,
     },
     validation: {
@@ -790,7 +880,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL, op
         '128 live-token protocols with a positive market cap, sorted by slug. 5-fold cross-validation on 103 (folds by index i % 5); a 25-protocol holdout (i % 5 === 4) touched once, after selection by CV. Median absolute percentage error; hit = prediction within 2x of the actual market cap.',
       cv: VALIDATION_CV,
       holdout_n: holdout.n,
-      holdout_shipped: { model: 'sonar-3: Theil-Sen curve + growth 0.25', ...holdout.shipped },
+      holdout_shipped: { model: 'sonar-4: Theil-Sen curve + growth 0.25 + age', ...holdout.shipped },
       holdout_global_median: { model: 'Global median', ...holdout.global_median },
       holdout_tvl_only: { model: 'TVL only (multiple 1.0)', ...holdout.tvl_only },
       fit,
@@ -798,7 +888,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL, op
       notes: [
         '16 of the 144 live-token protocols record a market cap of $0 or less (dead or failed tokens) and are excluded from every fit: no multiple can be learned from a zero.',
         'Growth is kept at quarter weight: out of sample it costs 0.1 points of median error (85.1% vs 85.0%) and keeps the seven-day momentum the criteria ask for.',
-        'Maturity (age) was tested and dropped: adding it cost about 2 points of median error (87.3% vs 85.1%), and 33 of the 128 training protocols carry no listed_at date, so the age input is missing for a quarter of the fit. Age still decides the farm hold.',
+        'Maturity (age) enters the value through a fitted multiplier: the curve residual\'s slope on centred log10(age+1), shrunk to +/-0.05 because the age signal is weak (correlation about -0.05) and a full fit would overfit noise. A protocol with no listed_at date gets no age adjustment; 33 of the 128 training protocols carry no date, so the age input is missing for a quarter of the fit. Age also decides the farm hold.',
         'A category-shrinkage variant (curve x category factor) was tested and dropped: 88.1%, worse than the plain global curve.',
       ],
     },

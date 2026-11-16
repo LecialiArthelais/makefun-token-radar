@@ -1,4 +1,4 @@
-// D Sonar's dashboard, sonar-3. It reads window.RADAR (written beside
+// D Sonar's dashboard, sonar-4. It reads window.RADAR (written beside
 // dashboard/ by main.ts) and renders the KPI hero, the top-three spotlight,
 // the filterable board, the live-token view, the model section with its
 // out-of-sample validation, and a detail drawer for every protocol with the
@@ -48,12 +48,14 @@
 
   // The model in one function: the page recomputes a row from the snapshot
   // figures and checks the number board.json carries, so the page's code and
-  // the board's data are visibly the same arithmetic. The curve multiple is
-  // the row's stored figure; the growth multiplier is recomputed here.
+  // the board's data are visibly the same arithmetic. The curve multiple and
+  // the age multiplier are the row's stored figures; the growth multiplier is
+  // recomputed here.
   function impliedOf(row, model) {
     var growth = clamp(row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d, model.growth_floor, model.growth_cap);
     var growthMult = 1 + (growth / 100) * model.growth_weight;
-    return Math.max(1, Math.round(row.tvl_usd * row.curve_multiple * growthMult));
+    var ageMult = row.age_multiplier === null || row.age_multiplier === undefined ? 1 : row.age_multiplier;
+    return Math.max(1, Math.round(row.tvl_usd * row.curve_multiple * growthMult * ageMult));
   }
   function growthMultOf(row, model) {
     var growth = clamp(row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d, model.growth_floor, model.growth_cap);
@@ -218,11 +220,23 @@
       else if (key === 'tvl') { av = a.tvl_usd; bv = b.tvl_usd; }
       else if (key === 'growth') { av = a.change_7d === null ? -Infinity : a.change_7d; bv = b.change_7d === null ? -Infinity : b.change_7d; }
       else if (key === 'age') { av = a.age_days === null ? Infinity : a.age_days; bv = b.age_days === null ? Infinity : b.age_days; }
+      else if (key === 'farm') { av = farmEconomics(a).net_ev_usd; bv = farmEconomics(b).net_ev_usd; }
+      else if (key === 'rating') { av = ratingRank(farmEconomics(a).rating); bv = ratingRank(farmEconomics(b).rating); }
       else { av = a.implied_value_usd; bv = b.implied_value_usd; }
       if (av < bv) return -state.dir;
       if (av > bv) return state.dir;
       return a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0;
     });
+  }
+
+  /** Rating order for sorting: A first, Skip last. */
+  function ratingRank(rating) {
+    return rating === 'A' ? 0 : rating === 'B' ? 1 : rating === 'C' ? 2 : 3;
+  }
+
+  /** CSS class suffix for a rating. 'Skip' uses skip-r because .skip is the skip-to-content link (positioned off-screen). */
+  function ratingClass(rating) {
+    return rating === 'Skip' ? 'skip-r' : rating.toLowerCase();
   }
 
   function renderStats() {
@@ -232,10 +246,9 @@
     var shippedCv = null;
     var i;
     for (i = 0; i < v.cv.length; i++) {
-      if (v.cv[i].model.indexOf('sonar-3') === 0) { shippedCv = v.cv[i]; break; }
+      if (v.cv[i].model.indexOf(DATA.model_version) === 0) { shippedCv = v.cv[i]; break; }
     }
-    var nets = DATA.rows.map(function (r) { return farmEconomics(r).net_ev_usd; }).sort(function (a, b) { return a - b; });
-    var medianNet = nets.length % 2 === 1 ? nets[(nets.length - 1) / 2] : (nets[nets.length / 2 - 1] + nets[nets.length / 2]) / 2;
+    var farmable = DATA.rows.filter(function (r) { var e = farmEconomics(r); return e.rating !== 'Skip'; }).length;
     var at100m = null;
     for (i = 0; i < DATA.curve.examples.length; i++) {
       if (DATA.curve.examples[i].tvl_usd === 100000000) { at100m = DATA.curve.examples[i]; break; }
@@ -246,7 +259,7 @@
       host.appendChild(el('div', { class: 'stat' }, el('b', { text: covered + ' / ' + DATA.watchlist_size }), el('span', { text: 'Watchlist covered' })));
       host.appendChild(el('div', { class: 'stat' }, el('b', { text: shippedCv ? Math.round(shippedCv.mdape_pct) + '%' : 'n/a' }), el('span', { text: 'Out-of-sample median error (5-fold CV)' })));
       host.appendChild(el('div', { class: 'stat' }, el('b', { text: top ? fmtUsd(top.implied_value_usd) : 'n/a' }), el('span', { text: 'Top implied value' })));
-      host.appendChild(el('div', { class: 'stat' }, el('b', { text: fmtSignedUsd(medianNet) }), el('span', { text: 'Median farm net EV (50k-farmer reference)' })));
+      host.appendChild(el('div', { class: 'stat' }, el('b', { text: farmable + ' / ' + DATA.board_size }), el('span', { text: 'Farms rated A, B or C (worth farming)' })));
       host.appendChild(el('div', { class: 'stat' }, el('b', { text: String(DATA.board_size) }), el('span', { text: 'Pre-token rows scored' })));
       host.appendChild(el('div', { class: 'stat' }, el('b', { text: at100m ? 'x' + at100m.multiple.toFixed(2) : 'n/a' }), el('span', { text: 'Curve multiple at $100M TVL' })));
     }
@@ -268,7 +281,7 @@
     var medianCv = null;
     var tvlCv = null;
     v.cv.forEach(function (r) {
-      if (r.model.indexOf('sonar-3') === 0) shippedCv = r;
+      if (r.model.indexOf(DATA.model_version) === 0) shippedCv = r;
       if (r.model === 'Global median') medianCv = r;
       if (r.model.indexOf('TVL only') === 0) tvlCv = r;
     });
@@ -286,7 +299,7 @@
     host.appendChild(el('b', { text: Math.round(tvlCv.mdape_pct) + '%' }));
     host.appendChild(document.createTextNode(' / '));
     host.appendChild(el('b', { text: Math.round(v.holdout_tvl_only.mdape_pct) + '%' }));
-    host.appendChild(document.createTextNode('. The curve is fitted to the snapshot\u2019s own live-token protocols; growth is kept at quarter weight, maturity was tested and dropped.'));
+    host.appendChild(document.createTextNode('. The curve is fitted to the snapshot\u2019s own live-token protocols; growth is kept at quarter weight and age enters through a fitted multiplier.')); 
   }
 
   function renderSpotlight() {
@@ -318,7 +331,7 @@
     );
     cat.addEventListener('change', function () { state.category = cat.value; writeHash(); renderBoard(); });
     var sort = el('select', { id: 'sort', 'aria-label': 'Sort the board' },
-      [['implied', 'Sort: implied value'], ['tvl', 'Sort: TVL'], ['growth', 'Sort: 7-day growth'], ['age', 'Sort: age'], ['name', 'Sort: name']].map(function (o) {
+      [['implied', 'Sort: implied value'], ['tvl', 'Sort: TVL'], ['growth', 'Sort: 7-day growth'], ['age', 'Sort: age'], ['farm', 'Sort: farm net EV'], ['rating', 'Sort: farm rating'], ['name', 'Sort: name']].map(function (o) {
         return el('option', { value: o[0], text: o[1], selected: o[0] === state.sort ? 'selected' : null });
       })
     );
@@ -362,6 +375,7 @@
     list.forEach(function (r) {
       var growth = r.change_7d === null ? 'n/a' : fmtPct(r.change_7d);
       var growthClass = r.change_7d === null ? '' : r.change_7d >= 0 ? 'pos' : 'neg';
+      var econ = farmEconomics(r);
       var tr = el('tr', {
         class: r.rank <= 3 ? 'top3' : null,
         'data-selected': state.selected === r.slug ? 'true' : 'false',
@@ -382,6 +396,10 @@
           el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(3, Math.round((r.implied_value_usd / max) * 100)) + '%' })),
           el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) })
         )),
+        el('td', null, el('div', { class: 'farm-cell' },
+          el('span', { class: 'rating ' + ratingClass(econ.rating), text: econ.rating }),
+          el('span', { class: 'num ' + (econ.net_ev_usd >= 0 ? 'pos' : 'neg'), text: fmtSignedUsd(econ.net_ev_usd) })
+        )),
         el('td', null, el('span', { class: 'status', text: 'no token' }))
       );
       tbody.appendChild(tr);
@@ -397,6 +415,7 @@
             sortHeader('growth', '7d'),
             sortHeader('age', 'Age'),
             sortHeader('implied', 'Implied value'),
+            sortHeader('farm', 'Farm'),
             el('th', { scope: 'col', text: 'Token' })
           )),
           tbody
@@ -466,7 +485,8 @@
     if (formula) {
       formula.textContent = 'log10(market cap) = ' + c.intercept.toFixed(4) + ' + ' + c.slope.toFixed(4) + ' x log10(TVL), fitted to the snapshot\u2019s own ' + c.n_live + ' live-token protocols with a positive market cap (Theil-Sen: the median pairwise slope). '
         + 'curve multiple = curve(TVL) / TVL, clamped to [' + m.multiple_floor + ', ' + m.multiple_cap + ']. '
-        + 'implied = round( tvl_usd x curve multiple x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') ).';
+        + 'implied = round( tvl_usd x curve multiple x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x age multiplier ). '
+        + 'age multiplier = 10 ^ (' + c.age.k.toFixed(4) + ' x (log10(age_days + 1) - ' + c.age.median_log_age.toFixed(4) + ')), fitted from the snapshot\u2019s own ' + c.age.n_with_age + ' live-token protocols that carry a listed_at date; 1 when a protocol carries no age.';
     }
     var examples = document.getElementById('curve-examples');
     if (examples) {
@@ -515,7 +535,7 @@
     var note = document.getElementById('model-note');
     if (note) {
       var f = DATA.farm;
-      note.textContent = 'Age is the time since the protocol was first listed, the best record of how long it has run with no token; it decides the farm hold, not the value — maturity was tested out of sample and dropped. '
+      note.textContent = 'Age is the time since the protocol was first listed, the best record of how long it has run with no token; it enters the value through a fitted multiplier (a young protocol is worth more than the curve alone says, an old one slightly less) and it decides the farm hold. '
         + 'Farm: the farmers\u2019 share is ' + Math.round(f.farmer_allocation * 100) + '% of the implied value, the reference crowd is ' + groupInt(f.reference_farmers) + ' farmers, capital earns ' + Math.round(f.capital_apr * 100) + '% a year, claim gas is $' + f.claim_gas_usd + '. '
         + 'Rating A breaks even with ' + groupInt(m.rating_a_farmers) + ' farmers, B with ' + groupInt(m.rating_b_farmers) + ', C with ' + groupInt(m.rating_c_farmers) + '.';
     }
@@ -556,6 +576,7 @@
         el('div', null, el('span', { text: 'Seven-day growth' }), el('b', { text: fmtPct(row.change_7d) })),
         el('div', null, el('span', { text: 'Growth multiplier' }), el('b', { text: String(growthMultOf(row, DATA.model).toFixed(4)) })),
         el('div', null, el('span', { text: 'Age with no token' }), el('b', { text: fmtAge(row.age_days) })),
+        el('div', null, el('span', { text: 'Age multiplier' }), el('b', { text: 'x' + (row.age_multiplier === null || row.age_multiplier === undefined ? 1 : row.age_multiplier).toFixed(4) })),
         el('div', null, el('span', { text: 'Implied value' }), el('b', { text: fmtUsd(row.implied_value_usd) }))
       ),
       el('p', { class: 'match', text: 'The page recomputes this row as ' + fmtUsd(recomputed) + (recomputed === row.implied_value_usd ? ' — the same number the board carries.' : ' — which differs from the board: the data would be stale.') + ' This is an estimate, not a price.' })
@@ -563,7 +584,7 @@
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm economics' }),
       el('div', { class: 'econ-head' },
-        el('span', { class: 'rating ' + econ.rating.toLowerCase(), text: econ.rating }),
+        el('span', { class: 'rating ' + ratingClass(econ.rating), text: econ.rating }),
         el('div', null,
           el('b', { text: 'Farm rating ' + econ.rating }),
           el('span', { text: 'Breaks even with up to ' + groupInt(econ.break_even_farmers) + ' farmers' })
