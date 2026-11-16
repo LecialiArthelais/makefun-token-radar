@@ -1,4 +1,4 @@
-// D Sonar's signal model, sonar-5: one sealed snapshot in, one ranked board out.
+// D Sonar's signal model, sonar-6: one sealed snapshot in, one ranked board out.
 //
 // The board ranks pre-token protocols by what their token would be worth if the
 // protocol's record stayed as it is. The value is not a prediction of a launch;
@@ -36,6 +36,7 @@
 // sample before it was shipped. Five-fold cross-validation on 103 live-token
 // protocols, then one 25-protocol holdout touched once, after selection:
 //   model                              CV median abs error   holdout
+//   sonar-6 (curve + growth + age)     85.6%                 82.7%
 //   sonar-5 (curve + growth + age)     85.6%                 82.7%
 //   sonar-4 (curve + growth + age)     85.6%                 82.7%
 //   sonar-3 (curve + growth 0.25)      85.1%                 82.7%
@@ -43,7 +44,11 @@
 // estimate: the value is still the sonar-4 number, and the CV above is
 // sonar-4's, re-labelled. What they add is auditability — the range says
 // how wide the category's own multiples spread around the point, and the
-// score says, in four named parts, why a row ranks where it does.
+// score says, in four named parts, why a row ranks where it does. Sonar-6
+// keeps the same value and adds mechanism-aware farm playbooks: the weekly
+// action and the claim step now follow the protocol's own mechanism (lending,
+// DEX, vault, perps, prediction, bridge, staking) instead of one template
+// for all 198 rows. The playbooks do not move the point estimate either.
 //   curve only (Theil-Sen)             85.0%                 82.3%
 //   OLS curve                          86.0%                 -
 //   category median                    90.6%                 -
@@ -147,7 +152,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'sonar-5';
+export const MODEL_VERSION = 'sonar-6';
 
 /** How many live-token protocols the live-token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -316,6 +321,7 @@ export interface CvRow {
  * validateHoldout); the CV table is the experiment's recorded result.
  */
 export const VALIDATION_CV: CvRow[] = [
+  { model: 'sonar-6: curve + growth 0.25 + age, range + score, playbooks', mdape_pct: 85.6, hit_pct: 28.2, typical_error_x: 3.49 },
   { model: 'sonar-5: curve + growth 0.25 + age, range + score', mdape_pct: 85.6, hit_pct: 28.2, typical_error_x: 3.49 },
   { model: 'sonar-4: Theil-Sen curve + growth 0.25 + age', mdape_pct: 85.6, hit_pct: 28.2, typical_error_x: 3.49 },
   { model: 'sonar-3: Theil-Sen curve + growth 0.25', mdape_pct: 85.1, hit_pct: 28.2, typical_error_x: 3.49 },
@@ -846,6 +852,33 @@ function actionFor(p: SnapshotProtocol, capital: number, chain: string): string 
   return `Deposit $${capital} of USDC into ${name} on ${chain} and use the app once a week.`;
 }
 
+/** The weekly recurring action, specific to the protocol's mechanism: the step that keeps the wallet active, not a single spike. */
+function weeklyActionFor(p: SnapshotProtocol, chain: string): string {
+  const c = (p.category ?? '').toLowerCase();
+  const name = p.name;
+  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Return once a week and move the loan — add collateral, repay a little, or borrow against it — so the wallet shows ongoing use, not one deposit.`;
+  if (c.includes('dex') || c.includes('amm') || c.includes('swap')) return `Return once a week and trade through ${name} on ${chain}, or add and remove a little liquidity, so the wallet shows trading activity, not one deposit.`;
+  if (c.includes('yield') || c.includes('leveraged farm') || c.includes('farm')) return `Return once a week and tend the vault — top up, harvest, or re-stake the yield — so the wallet shows ongoing use, not one deposit.`;
+  if (c.includes('bridge')) return `Return once a week and bridge a small amount through ${name}, so the wallet shows repeated use, not one crossing.`;
+  if (c.includes('staking') || c.includes('restak')) return `Return once a week and check the stake — restake the rewards or adjust the delegation — so the wallet shows ongoing use.`;
+  if (c.includes('perpetual') || c.includes('derivative')) return `Return once a week and open and close one small hedged position on ${name}, so the wallet shows trading activity, not one margin post.`;
+  if (c.includes('prediction')) return `Return once a week and take a position in a new live market on ${name}, so the wallet shows ongoing participation.`;
+  if (c.includes('curator') || c.includes('allocator') || c.includes('vault')) return `Return once a week and check the vault — top up or rebalance the shares — so the wallet shows ongoing use, not one deposit.`;
+  if (c.includes('stable')) return `Return once a week and use the stable asset — mint, hold, or move it through ${name} — so the wallet shows ongoing use.`;
+  if (c.includes('rwa')) return `Return once a week and check the yield-bearing asset — hold it or top it up — so the wallet shows ongoing use.`;
+  if (c.includes('insurance')) return `Return once a week and check the cover — keep the policy active and top it up if it lapses.`;
+  return `Return once a week and do one real action on ${name}, a deposit, a swap, a borrow or a vote, so the wallet shows a pattern, not a single spike.`;
+}
+
+/** The claim step, specific to what the protocol is likely to reward: the check to run and the scam to avoid. */
+function claimFor(p: SnapshotProtocol): string {
+  const c = (p.category ?? '').toLowerCase();
+  if (c.includes('dex') || c.includes('amm') || c.includes('swap') || c.includes('perpetual') || c.includes('derivative')) return `When rewards open, check the trading-rewards page on the protocol's own site and claim only there. A claim that asks you to pay, connect, or sign a blind approval is a scam.`;
+  if (c.includes('prediction')) return `When a market settles, claim the winnings on the protocol's own site and check the rewards page for any farmer distribution. A claim that asks you to pay or sign a blind approval is a scam.`;
+  if (c.includes('bridge')) return `When rewards open, check the protocol's own rewards page for bridging incentives and claim only there. A claim that asks you to pay, connect, or sign a blind approval is a scam.`;
+  return `When a claim opens, use only the link on the protocol's own rewards page. A claim that asks you to pay, connect, or sign a blind approval is a scam.`;
+}
+
 /**
  * A protocol's farm plan: six steps, each an action with a cost and a time. The plan is derived from
  * the protocol's own record (category, chains, TVL, age), never from a hand-written list of names.
@@ -867,7 +900,7 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       time: '15 minutes to set up',
     },
     {
-      text: `Return once a week and do one real action, a deposit, a swap, a borrow or a vote, so the wallet shows a pattern, not a single spike.`,
+      text: weeklyActionFor(p, chain),
       cost: 'about $2 of gas a week',
       time: '10 minutes a week',
     },
@@ -877,7 +910,7 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
       time: `${hold} days`,
     },
     {
-      text: `When a claim opens, use only the link on the protocol's own rewards page. A claim that asks you to pay, connect, or sign a blind approval is a scam.`,
+      text: claimFor(p),
       cost: 'no fee to check',
       time: '10 minutes',
     },
@@ -1096,7 +1129,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL, op
         '128 live-token protocols with a positive market cap, sorted by slug. 5-fold cross-validation on 103 (folds by index i % 5); a 25-protocol holdout (i % 5 === 4) touched once, after selection by CV. Median absolute percentage error; hit = prediction within 2x of the actual market cap.',
       cv: VALIDATION_CV,
       holdout_n: holdout.n,
-      holdout_shipped: { model: 'sonar-5: curve + growth 0.25 + age, range + score', ...holdout.shipped },
+      holdout_shipped: { model: 'sonar-6: curve + growth 0.25 + age, range + score, playbooks', ...holdout.shipped },
       holdout_global_median: { model: 'Global median', ...holdout.global_median },
       holdout_tvl_only: { model: 'TVL only (multiple 1.0)', ...holdout.tvl_only },
       fit,

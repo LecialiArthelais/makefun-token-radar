@@ -1,4 +1,4 @@
-// D Sonar's dashboard, sonar-5. It reads window.RADAR (written beside
+// D Sonar's dashboard, sonar-6. It reads window.RADAR (written beside
 // dashboard/ by main.ts) and renders the KPI hero, the top-three spotlight,
 // the filterable board, the live-token view, the model section with its
 // out-of-sample validation, and a detail drawer for every protocol with the
@@ -126,6 +126,29 @@
     if (c.indexOf('insurance') >= 0) return 'Buy $' + capital + ' of cover from ' + name + ' on ' + chain + ' and keep the policy active.';
     return 'Deposit $' + capital + ' of USDC into ' + name + ' on ' + chain + ' and use the app once a week.';
   }
+  function weeklyActionFor(p, chain) {
+    var c = (p.category || '').toLowerCase();
+    var name = p.name;
+    if (c.indexOf('lend') >= 0 || c.indexOf('cdp') >= 0 || c.indexOf('collateral') >= 0) return 'Return once a week and move the loan — add collateral, repay a little, or borrow against it — so the wallet shows ongoing use, not one deposit.';
+    if (c.indexOf('dex') >= 0 || c.indexOf('amm') >= 0 || c.indexOf('swap') >= 0) return 'Return once a week and trade through ' + name + ' on ' + chain + ', or add and remove a little liquidity, so the wallet shows trading activity, not one deposit.';
+    if (c.indexOf('yield') >= 0 || c.indexOf('leveraged farm') >= 0 || c.indexOf('farm') >= 0) return 'Return once a week and tend the vault — top up, harvest, or re-stake the yield — so the wallet shows ongoing use, not one deposit.';
+    if (c.indexOf('bridge') >= 0) return 'Return once a week and bridge a small amount through ' + name + ', so the wallet shows repeated use, not one crossing.';
+    if (c.indexOf('staking') >= 0 || c.indexOf('restak') >= 0) return 'Return once a week and check the stake — restake the rewards or adjust the delegation — so the wallet shows ongoing use.';
+    if (c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0) return 'Return once a week and open and close one small hedged position on ' + name + ', so the wallet shows trading activity, not one margin post.';
+    if (c.indexOf('prediction') >= 0) return 'Return once a week and take a position in a new live market on ' + name + ', so the wallet shows ongoing participation.';
+    if (c.indexOf('curator') >= 0 || c.indexOf('allocator') >= 0 || c.indexOf('vault') >= 0) return 'Return once a week and check the vault — top up or rebalance the shares — so the wallet shows ongoing use, not one deposit.';
+    if (c.indexOf('stable') >= 0) return 'Return once a week and use the stable asset — mint, hold, or move it through ' + name + ' — so the wallet shows ongoing use.';
+    if (c.indexOf('rwa') >= 0) return 'Return once a week and check the yield-bearing asset — hold it or top it up — so the wallet shows ongoing use.';
+    if (c.indexOf('insurance') >= 0) return 'Return once a week and check the cover — keep the policy active and top it up if it lapses.';
+    return 'Return once a week and do one real action on ' + name + ', a deposit, a swap, a borrow or a vote, so the wallet shows a pattern, not a single spike.';
+  }
+  function claimFor(p) {
+    var c = (p.category || '').toLowerCase();
+    if (c.indexOf('dex') >= 0 || c.indexOf('amm') >= 0 || c.indexOf('swap') >= 0 || c.indexOf('perpetual') >= 0 || c.indexOf('derivative') >= 0) return "When rewards open, check the trading-rewards page on the protocol's own site and claim only there. A claim that asks you to pay, connect, or sign a blind approval is a scam.";
+    if (c.indexOf('prediction') >= 0) return "When a market settles, claim the winnings on the protocol's own site and check the rewards page for any farmer distribution. A claim that asks you to pay or sign a blind approval is a scam.";
+    if (c.indexOf('bridge') >= 0) return "When rewards open, check the protocol's own rewards page for bridging incentives and claim only there. A claim that asks you to pay, connect, or sign a blind approval is a scam.";
+    return "When a claim opens, use only the link on the protocol's own rewards page. A claim that asks you to pay, connect, or sign a blind approval is a scam.";
+  }
   function stepText(step) {
     var s = step.text + ' Cost: ' + step.cost + '. Time: ' + step.time + '.';
     if (s.length > 600) s = s.slice(0, 596) + '...';
@@ -139,9 +162,9 @@
     return [
       { text: 'Open a fresh wallet for this farm only, fund it with just the capital below, and store its seed phrase offline, never in a screenshot or a chat.', cost: 'under $3 of gas for the first transaction', time: '5 minutes' },
       { text: actionFor(p, capital, chain), cost: '$' + capital + ' of capital and about $' + (capital >= 200 ? 8 : 4) + ' of gas', time: '15 minutes to set up' },
-      { text: 'Return once a week and do one real action, a deposit, a swap, a borrow or a vote, so the wallet shows a pattern, not a single spike.', cost: 'about $2 of gas a week', time: '10 minutes a week' },
+      { text: weeklyActionFor(p, chain), cost: 'about $2 of gas a week', time: '10 minutes a week' },
       { text: 'Keep the position for at least ' + hold + ' days, across more than one snapshot, instead of farming and leaving in a day.', cost: 'the $' + capital + ' stays in the position', time: hold + ' days' },
-      { text: "When a claim opens, use only the link on the protocol's own rewards page. A claim that asks you to pay, connect, or sign a blind approval is a scam.", cost: 'no fee to check', time: '10 minutes' },
+      { text: claimFor(p), cost: 'no fee to check', time: '10 minutes' },
       { text: 'Log the wallet, the dates, and every transaction hash in one note, so you can prove the activity or unwind it later.', cost: 'nothing but the log', time: '5 minutes' }
     ].map(stepText);
   }

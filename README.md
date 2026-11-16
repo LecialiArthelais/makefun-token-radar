@@ -46,7 +46,7 @@ sit above the floor without being named on the watchlist, and the board ranks
 them too. The house rule's parentProtocol leg is not one of the snapshot's ten
 fields, so it cannot be checked here; the board states that.
 
-## The model (sonar-5)
+## The model (sonar-6)
 
 A Theil-Sen log-log curve of market cap on TVL, fitted at run time to the
 snapshot's own 128 live-token protocols with a positive market cap (the 16
@@ -94,6 +94,7 @@ the actual market cap.
 
 | Model | CV median error | CV hit (2x) | Holdout median error |
 |---|---|---|---|
+| sonar-6: curve + growth 0.25 + age, range + score, playbooks | 85.6% | 28.2% | 82.7% |
 | sonar-5: curve + growth 0.25 + age, range + score | 85.6% | 28.2% | 82.7% |
 | sonar-4: Theil-Sen curve + growth 0.25 + age | 85.6% | 28.2% | 82.7% |
 | sonar-3: Theil-Sen curve + growth 0.25 | 85.1% | 28.2% | 82.7% |
@@ -114,7 +115,15 @@ Sonar-5 adds the implied-value range and the composite score; neither moves
 the point estimate, so its CV and holdout are sonar-4's, re-labelled. What
 they add is auditability: the range says how wide the category's own
 multiples spread around the point, and the score says, in four named parts,
-why a row ranks where it does. Outlier trimming of the training comps was
+why a row ranks where it does. Sonar-6 keeps the same value and adds
+mechanism-aware farm playbooks: the weekly action and the claim step now
+follow the protocol's own mechanism — lending moves the loan, a DEX trades
+through the pool, a vault is tended, a perp opens and closes a hedged
+position, a prediction market takes a new position, a bridge crosses again —
+instead of one template for all 198 rows. Across the board that is 74
+distinct weekly actions and 4 distinct claim steps, all derived from the
+protocol's own category, never from a hand-written list of names. The
+playbooks do not move the point estimate either. Outlier trimming of the training comps was
 tested and rejected: it cost 2.4-3.0 points of CV median error (88.0-88.6%
 vs 85.6%) — the Theil-Sen fit is already robust, and trimming only removes
 information.
