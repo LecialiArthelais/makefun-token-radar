@@ -214,6 +214,17 @@ tr.top3 .rank-dot { background: var(--accent); color: #FFFFFF; }
 .steps b { display: block; font-weight: 600; }
 .cost { color: var(--muted); font-size: 12px; font-family: var(--font-num); }
 .match { margin-top: var(--s3); font-size: 13px; color: var(--accent-deep); font-weight: 600; }
+.score-rows { display: grid; gap: var(--s2); margin-top: var(--s3); }
+.score-row { display: flex; align-items: center; gap: var(--s3); font-size: 13px; }
+.score-row .score-label { width: 84px; flex: none; color: var(--muted); }
+.score-row .bar { width: 90px; flex: none; }
+.score-row .num { font-family: var(--font-num); font-weight: 600; width: 34px; flex: none; text-align: right; }
+.score-row .score-why { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.peer-table { width: 100%; margin-top: var(--s3); border-collapse: collapse; font-size: 12px; }
+.peer-table th, .peer-table td { text-align: left; padding: var(--s1) var(--s2); border-bottom: 1px solid var(--border); }
+.peer-table th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
+.peer-table td { font-family: var(--font-num); }
+.peer-table td:first-child { font-family: var(--font-body); font-weight: 600; }
 .rating {
   display: inline-grid; place-items: center; min-width: 34px; height: 34px;
   border-radius: 50%; font-family: var(--font-num); font-size: 15px; font-weight: 700;
@@ -227,7 +238,7 @@ tr.top3 .rank-dot { background: var(--accent); color: #FFFFFF; }
 .farm-cell .num { font-family: var(--font-num); font-size: 13px; font-weight: 600; }
 .econ-head { display: flex; align-items: center; gap: var(--s3); margin-bottom: var(--s2); }
 .econ-head b { display: block; font-size: 16px; }
-.econ-head span { display: block; color: var(--muted); font-size: 13px; }
+.econ-head div span { display: block; color: var(--muted); font-size: 13px; }
 
 /* Footer */
 .foot { margin-top: var(--s6); padding-top: var(--s5); border-top: 1px solid var(--border); display: grid; gap: var(--s2); }

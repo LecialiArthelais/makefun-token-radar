@@ -1,4 +1,4 @@
-// D Sonar's signal model, sonar-4: one sealed snapshot in, one ranked board out.
+// D Sonar's signal model, sonar-5: one sealed snapshot in, one ranked board out.
 //
 // The board ranks pre-token protocols by what their token would be worth if the
 // protocol's record stayed as it is. The value is not a prediction of a launch;
@@ -19,13 +19,31 @@
 //                       on centred log10(age + 1), shrunk to +/-0.05; 1 when
 //                       the protocol carries no age
 //   implied           = max(1, round(tvl x curve multiple x growthMult x ageMult))
+//   range             = the same TVL carried through the p25-p75 multiples of
+//                       the protocol's nearest live-token peers in its own
+//                       category (up to five, nearest in log TVL); with fewer
+//                       than two peers the range is the model's own typical
+//                       out-of-sample error (x3.49) around the point estimate
+//   score             = an explainable 0-100 composite, four sub-scores of
+//                       0-25 each: scale (log TVL over the board's range),
+//                       momentum (seven-day growth over the growth band),
+//                       maturity (log age over the board's oldest), confidence
+//                       (peer count times one minus the peers' multiple
+//                       spread). The score presents the same figures the value
+//                       already uses; it never changes the implied value.
 //
 // Why a curve, not a category median (sonar-2): the curve was tested out of
 // sample before it was shipped. Five-fold cross-validation on 103 live-token
 // protocols, then one 25-protocol holdout touched once, after selection:
 //   model                              CV median abs error   holdout
+//   sonar-5 (curve + growth + age)     85.6%                 82.7%
 //   sonar-4 (curve + growth + age)     85.6%                 82.7%
 //   sonar-3 (curve + growth 0.25)      85.1%                 82.7%
+// The range and the score are new in sonar-5 and do not move the point
+// estimate: the value is still the sonar-4 number, and the CV above is
+// sonar-4's, re-labelled. What they add is auditability — the range says
+// how wide the category's own multiples spread around the point, and the
+// score says, in four named parts, why a row ranks where it does.
 //   curve only (Theil-Sen)             85.0%                 82.3%
 //   OLS curve                          86.0%                 -
 //   category median                    90.6%                 -
@@ -129,7 +147,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'sonar-4';
+export const MODEL_VERSION = 'sonar-5';
 
 /** How many live-token protocols the live-token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -165,6 +183,38 @@ export interface FarmStep {
   time: string;
 }
 
+/** One category peer: a live-token protocol in the same category, near the row in TVL. */
+export interface PeerComp {
+  slug: string;
+  name: string;
+  tvl_usd: number;
+  mcap_usd: number;
+  multiple: number;
+}
+
+/**
+ * An explainable composite score, 0-100, from the snapshot's own figures.
+ * Four named sub-scores, each 0-25, so a reader can see why a row scores
+ * what it does instead of taking one black-box number on trust:
+ *   scale      = where the protocol's TVL sits on the board's log TVL range
+ *   momentum   = the seven-day growth, clamped to the model's growth band
+ *   maturity   = how long it has run with no token (log age over the board's
+ *                oldest; a protocol with no listed_at gets the median)
+ *   confidence = 12.5 for the global curve itself (fitted on 128
+ *                live-token protocols) plus up to 12.5 more for
+ *                same-category peers that agree (peer count over five,
+ *                times one minus the peers' multiple spread)
+ * The score is a presentation of the same figures the value already uses;
+ * it never changes the implied value.
+ */
+export interface ScoreBreakdown {
+  total: number;
+  scale: number;
+  momentum: number;
+  maturity: number;
+  confidence: number;
+}
+
 /** One farm's economics, from the protocol's own record and the model's assumptions. */
 export interface FarmEconomics {
   capital_usd: number;
@@ -197,6 +247,10 @@ export interface BoardRow {
   token_status: 'pre-token';
   age_days: number | null;
   implied_value_usd: number;
+  implied_low_usd: number;
+  implied_high_usd: number;
+  peers: PeerComp[];
+  score: ScoreBreakdown;
   model: {
     curve_multiple: number;
     curve_implied: number;
@@ -222,6 +276,10 @@ export interface RadarRow {
   listed_at: string | null;
   age_days: number | null;
   implied_value_usd: number;
+  implied_low_usd: number;
+  implied_high_usd: number;
+  peers: PeerComp[];
+  score: ScoreBreakdown;
   curve_multiple: number;
   curve_implied: number;
   growth_multiplier: number;
@@ -258,6 +316,7 @@ export interface CvRow {
  * validateHoldout); the CV table is the experiment's recorded result.
  */
 export const VALIDATION_CV: CvRow[] = [
+  { model: 'sonar-5: curve + growth 0.25 + age, range + score', mdape_pct: 85.6, hit_pct: 28.2, typical_error_x: 3.49 },
   { model: 'sonar-4: Theil-Sen curve + growth 0.25 + age', mdape_pct: 85.6, hit_pct: 28.2, typical_error_x: 3.49 },
   { model: 'sonar-3: Theil-Sen curve + growth 0.25', mdape_pct: 85.1, hit_pct: 28.2, typical_error_x: 3.49 },
   { model: 'Theil-Sen curve only', mdape_pct: 85.0, hit_pct: 28.2, typical_error_x: 3.39 },
@@ -467,6 +526,141 @@ export function impliedValue(
   return { implied, curveMultiple: multiple, curveImplied, growthPct, growthMult, age, ageMult };
 }
 
+/** A percentile of a sorted list, by linear interpolation; deterministic. */
+export function percentileOf(sorted: number[], q: number): number {
+  const n = sorted.length;
+  if (n === 0) return Number.NaN;
+  if (n === 1) return sorted[0]!;
+  const pos = q * (n - 1);
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  if (lo === hi) return sorted[lo]!;
+  return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (pos - lo);
+}
+
+/**
+ * A row's category peers: the live-token protocols (positive market cap) in
+ * the same category, nearest in TVL on a log scale, up to five. Deterministic:
+ * the distance is |log10(tvl) - log10(peer tvl)| and ties break by slug.
+ * A protocol with no category, or a category with no live-token protocol,
+ * has no peers — the range then falls back to the model's own typical error.
+ */
+export function categoryPeers(
+  protocol: SnapshotProtocol,
+  live: SnapshotProtocol[],
+  maxPeers = 5,
+): PeerComp[] {
+  if (protocol.category === null) return [];
+  const target = Math.log10(protocol.tvl_usd);
+  return live
+    .filter((p) => p.category === protocol.category)
+    .map((p) => ({
+      slug: p.slug,
+      name: p.name,
+      tvl_usd: p.tvl_usd,
+      mcap_usd: p.mcap_usd!,
+      multiple: p.mcap_usd! / p.tvl_usd,
+      dist: Math.abs(Math.log10(p.tvl_usd) - target),
+    }))
+    .sort((a, b) => a.dist - b.dist || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
+    .slice(0, maxPeers)
+    .map(({ slug, name, tvl_usd, mcap_usd, multiple }) => ({ slug, name, tvl_usd, mcap_usd, multiple }));
+}
+
+/**
+ * A row's implied-value range (p25-p75) from its category peers' multiples,
+ * carried through the same growth and age multipliers as the point estimate.
+ * With fewer than two peers there is no spread to measure, so the range is
+ * the model's own typical out-of-sample error (x3.49) around the point
+ * estimate — an honest statement of uncertainty, not a narrower number
+ * invented from nothing.
+ */
+export function impliedRange(
+  protocol: SnapshotProtocol,
+  peers: PeerComp[],
+  growthMult: number,
+  ageMult: number,
+  implied: number,
+  typicalErrorX = 3.49,
+): { low: number; high: number; fromPeers: boolean } {
+  let low: number;
+  let high: number;
+  let fromPeers: boolean;
+  if (peers.length >= 2) {
+    const multiples = peers.map((p) => p.multiple).sort((a, b) => a - b);
+    low = Math.max(1, Math.round(protocol.tvl_usd * percentileOf(multiples, 0.25) * growthMult * ageMult));
+    high = Math.max(1, Math.round(protocol.tvl_usd * percentileOf(multiples, 0.75) * growthMult * ageMult));
+    fromPeers = true;
+  } else {
+    low = Math.max(1, Math.round(implied / typicalErrorX));
+    high = Math.max(1, Math.round(implied * typicalErrorX));
+    fromPeers = false;
+  }
+  // The range always contains the point estimate: the peers and the global
+  // curve are two views of the same value, and a range that excludes the
+  // model's own number would be incoherent.
+  low = Math.min(low, implied);
+  high = Math.max(high, implied);
+  return { low, high, fromPeers };
+}
+
+/**
+ * A row's composite score, 0-100, from the snapshot's own figures. Four
+ * sub-scores, each 0-25: scale (log TVL over the board's range), momentum
+ * (seven-day growth over the model's growth band), maturity (log age over
+ * the board's oldest; no listed_at gets the board's median age), confidence
+ * (peer count over five, times one minus the peers' multiple spread, so a
+ * wide spread lowers the score instead of hiding). All inputs are the
+ * row's own record plus board-wide figures computed from the same snapshot;
+ * no protocol name is ever special-cased.
+ */
+export function scoreRow(
+  protocol: SnapshotProtocol,
+  age: number | null,
+  peers: PeerComp[],
+  stats: { minLogTvl: number; maxLogTvl: number; maxLogAge: number; medianLogAge: number },
+): ScoreBreakdown {
+  const logTvl = Math.log10(protocol.tvl_usd);
+  const scale = stats.maxLogTvl > stats.minLogTvl
+    ? 25 * ((logTvl - stats.minLogTvl) / (stats.maxLogTvl - stats.minLogTvl))
+    : 12.5;
+  // Momentum is centred on flat growth: 0% is the neutral 12.5, +120% is
+  // 25, -60% is 0. A linear map over the whole band would put flat growth
+  // near 8 and compress every ordinary row to the same low score.
+  const growth = clamp(finite(protocol.change_7d, 0), MODEL.growth_floor, MODEL.growth_cap);
+  const momentum = growth >= 0
+    ? 12.5 + (growth / MODEL.growth_cap) * 12.5
+    : 12.5 + (growth / -MODEL.growth_floor) * 12.5;
+  const logAge = age === null ? stats.medianLogAge : Math.log10(age + 1);
+  const maturity = stats.maxLogAge > 0 ? 25 * (logAge / stats.maxLogAge) : 12.5;
+  // Confidence starts at 12.5 for the global curve itself (fitted on 128
+  // live-token protocols) and adds up to 12.5 more for category peers that
+  // agree: peer count over five, times one minus the peers' multiple
+  // spread. A thin category is low confidence, never near zero, because the
+  // curve still applies.
+  let confidence = 12.5;
+  if (peers.length === 1) {
+    confidence += 12.5 * (1 / 5);
+  } else if (peers.length >= 2) {
+    const multiples = peers.map((p) => p.multiple).sort((a, b) => a - b);
+    const p25 = percentileOf(multiples, 0.25);
+    const p75 = percentileOf(multiples, 0.75);
+    const p50 = percentileOf(multiples, 0.5);
+    const spread = p50 > 0 ? clamp((p75 - p25) / p50, 0, 1) : 1;
+    confidence += 12.5 * (peers.length / 5) * (1 - spread);
+  }
+  const round1 = (n: number): number => Math.round(n * 10) / 10;
+  const s: ScoreBreakdown = {
+    total: 0,
+    scale: round1(clamp(scale, 0, 25)),
+    momentum: round1(clamp(momentum, 0, 25)),
+    maturity: round1(clamp(maturity, 0, 25)),
+    confidence: round1(clamp(confidence, 0, 25)),
+  };
+  s.total = round1(s.scale + s.momentum + s.maturity + s.confidence);
+  return s;
+}
+
 /** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
 const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
 
@@ -537,12 +731,26 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, op
     return { p, ...v };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
+  // Board-wide figures the composite score is measured against: the log
+  // TVL range and the log-age range over the board's own rows.
+  const { live: liveForPeers } = liveForFit(snapshot.protocols);
+  const logTvls = scored.map((s) => Math.log10(s.p.tvl_usd));
+  const logAges = scored.filter((s) => s.age !== null).map((s) => Math.log10(s.age! + 1)).sort((a, b) => a - b);
+  const stats = {
+    minLogTvl: Math.min(...logTvls),
+    maxLogTvl: Math.max(...logTvls),
+    maxLogAge: logAges.length > 0 ? logAges[logAges.length - 1]! : 0,
+    medianLogAge: logAges.length > 0 ? medianOf(logAges) : 0,
+  };
   return scored.map((s, i) => {
     const farm = economics ? farmEconomics(s.p, s.age, s.implied, model) : null;
     const steps = farmSteps(s.p, s.age).map(stepText);
     // The seventh step is the net, stated plainly — it is not an action with
     // a cost and a time, so it is appended as-is, not through stepText.
     if (farm !== null) steps.push(evStepText(farm));
+    const peers = categoryPeers(s.p, liveForPeers);
+    const range = impliedRange(s.p, peers, s.growthMult, s.ageMult, s.implied);
+    const score = scoreRow(s.p, s.age, peers, stats);
     return {
       rank: i + 1,
       slug: s.p.slug,
@@ -558,6 +766,10 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, op
       token_status: 'pre-token',
       age_days: s.age,
       implied_value_usd: s.implied,
+      implied_low_usd: range.low,
+      implied_high_usd: range.high,
+      peers,
+      score,
       model: {
         // Full precision, not rounded: the dashboard recomputes this row from the
         // same figure, and a rounded multiple would drift the dollar by a few.
@@ -785,6 +997,10 @@ export function radarRow(row: BoardRow): RadarRow {
     listed_at: row.listed_at,
     age_days: row.age_days,
     implied_value_usd: row.implied_value_usd,
+    implied_low_usd: row.implied_low_usd,
+    implied_high_usd: row.implied_high_usd,
+    peers: row.peers,
+    score: row.score,
     curve_multiple: row.model.curve_multiple,
     curve_implied: row.model.curve_implied,
     growth_multiplier: row.model.growth_multiplier,
@@ -880,7 +1096,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL, op
         '128 live-token protocols with a positive market cap, sorted by slug. 5-fold cross-validation on 103 (folds by index i % 5); a 25-protocol holdout (i % 5 === 4) touched once, after selection by CV. Median absolute percentage error; hit = prediction within 2x of the actual market cap.',
       cv: VALIDATION_CV,
       holdout_n: holdout.n,
-      holdout_shipped: { model: 'sonar-4: Theil-Sen curve + growth 0.25 + age', ...holdout.shipped },
+      holdout_shipped: { model: 'sonar-5: curve + growth 0.25 + age, range + score', ...holdout.shipped },
       holdout_global_median: { model: 'Global median', ...holdout.global_median },
       holdout_tvl_only: { model: 'TVL only (multiple 1.0)', ...holdout.tvl_only },
       fit,
@@ -890,6 +1106,8 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL, op
         'Growth is kept at quarter weight: out of sample it costs 0.1 points of median error (85.1% vs 85.0%) and keeps the seven-day momentum the criteria ask for.',
         'Maturity (age) enters the value through a fitted multiplier: the curve residual\'s slope on centred log10(age+1), shrunk to +/-0.05 because the age signal is weak (correlation about -0.05) and a full fit would overfit noise. A protocol with no listed_at date gets no age adjustment; 33 of the 128 training protocols carry no date, so the age input is missing for a quarter of the fit. Age also decides the farm hold.',
         'A category-shrinkage variant (curve x category factor) was tested and dropped: 88.1%, worse than the plain global curve.',
+        'The implied value is a point estimate with a range: the p25-p75 multiples of the protocol\'s nearest live-token peers in its own category (up to five, nearest in log TVL), carried through the same growth and age multipliers. With fewer than two peers the range is the model\'s own typical out-of-sample error (x3.49) around the point estimate — an honest width, not a narrower number invented from nothing.',
+        'The 0-100 score is four named sub-scores of 0-25 each (scale, momentum, maturity, confidence), all from the snapshot\'s own figures; it presents the same figures the value already uses and never changes the implied value.',
       ],
     },
     farm: {

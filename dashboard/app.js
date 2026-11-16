@@ -1,4 +1,4 @@
-// D Sonar's dashboard, sonar-4. It reads window.RADAR (written beside
+// D Sonar's dashboard, sonar-5. It reads window.RADAR (written beside
 // dashboard/ by main.ts) and renders the KPI hero, the top-three spotlight,
 // the filterable board, the live-token view, the model section with its
 // out-of-sample validation, and a detail drawer for every protocol with the
@@ -60,6 +60,16 @@
   function growthMultOf(row, model) {
     var growth = clamp(row.change_7d === null || row.change_7d === undefined ? 0 : row.change_7d, model.growth_floor, model.growth_cap);
     return 1 + (growth / 100) * model.growth_weight;
+  }
+
+  /** One sub-score row: label, a bar scaled to 0-25, the value, and why. */
+  function scoreRowEl(label, value, why) {
+    return el('div', { class: 'score-row' },
+      el('span', { class: 'score-label', text: label }),
+      el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(2, Math.round((value / 25) * 100)) + '%' })),
+      el('b', { class: 'num', text: value.toFixed(1) }),
+      el('span', { class: 'score-why', text: why })
+    );
   }
 
   function el(tag, attrs) {
@@ -486,7 +496,8 @@
       formula.textContent = 'log10(market cap) = ' + c.intercept.toFixed(4) + ' + ' + c.slope.toFixed(4) + ' x log10(TVL), fitted to the snapshot\u2019s own ' + c.n_live + ' live-token protocols with a positive market cap (Theil-Sen: the median pairwise slope). '
         + 'curve multiple = curve(TVL) / TVL, clamped to [' + m.multiple_floor + ', ' + m.multiple_cap + ']. '
         + 'implied = round( tvl_usd x curve multiple x (1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight + ') x age multiplier ). '
-        + 'age multiplier = 10 ^ (' + c.age.k.toFixed(4) + ' x (log10(age_days + 1) - ' + c.age.median_log_age.toFixed(4) + ')), fitted from the snapshot\u2019s own ' + c.age.n_with_age + ' live-token protocols that carry a listed_at date; 1 when a protocol carries no age.';
+        + 'age multiplier = 10 ^ (' + c.age.k.toFixed(4) + ' x (log10(age_days + 1) - ' + c.age.median_log_age.toFixed(4) + ')), fitted from the snapshot\u2019s own ' + c.age.n_with_age + ' live-token protocols that carry a listed_at date; 1 when a protocol carries no age. '
+        + 'The range is the p25-p75 multiples of the protocol\u2019s nearest live-token peers in its own category (up to five, nearest in log TVL), carried through the same growth and age multipliers — or the model\u2019s typical out-of-sample error (x3.49) when fewer than two peers exist. The 0-100 score is four named sub-scores of 0-25 each (scale, momentum, maturity, confidence), all from the snapshot\u2019s own figures.';
     }
     var examples = document.getElementById('curve-examples');
     if (examples) {
@@ -580,6 +591,43 @@
         el('div', null, el('span', { text: 'Implied value' }), el('b', { text: fmtUsd(row.implied_value_usd) }))
       ),
       el('p', { class: 'match', text: 'The page recomputes this row as ' + fmtUsd(recomputed) + (recomputed === row.implied_value_usd ? ' — the same number the board carries.' : ' — which differs from the board: the data would be stale.') + ' This is an estimate, not a price.' })
+    ));
+    dialog.appendChild(el('section', { class: 'detail-section' },
+      el('h3', { text: 'Score' }),
+      el('div', { class: 'equation' },
+        el('div', null, el('span', { text: 'Composite score (0-100)' }), el('b', { text: row.score.total.toFixed(1) + ' / 100' }))
+      ),
+      el('div', { class: 'score-rows' },
+        scoreRowEl('Scale', row.score.scale, fmtUsd(row.tvl_usd) + ' in TVL'),
+        scoreRowEl('Momentum', row.score.momentum, fmtPct(row.change_7d) + ' in 7 days'),
+        scoreRowEl('Maturity', row.score.maturity, row.age_days === null ? 'no listed date' : fmtAge(row.age_days) + ' with no token'),
+        scoreRowEl('Confidence', row.score.confidence, row.peers.length === 0 ? 'no category peers — the global curve only' : row.peers.length + ' category peer' + (row.peers.length === 1 ? '' : 's'))
+      ),
+      el('p', { class: 'match', text: 'Four named parts, each 0-25, all from the snapshot\u2019s own figures. The score presents the same figures the value already uses; it never changes the implied value.' })
+    ));
+    dialog.appendChild(el('section', { class: 'detail-section' },
+      el('h3', { text: 'Implied value range' }),
+      el('div', { class: 'equation' },
+        el('div', null, el('span', { text: 'Point estimate' }), el('b', { text: fmtUsd(row.implied_value_usd) })),
+        el('div', null, el('span', { text: 'Range (p25-p75)' }), el('b', { text: fmtUsd(row.implied_low_usd) + ' – ' + fmtUsd(row.implied_high_usd) }))
+      ),
+      row.peers.length >= 2
+        ? el('div', null,
+            el('p', { class: 'match', text: 'From the p25-p75 multiples of its ' + row.peers.length + ' nearest live-token peers in ' + (row.category || 'its category') + ', carried through the same growth and age multipliers.' }),
+            el('table', { class: 'peer-table' },
+              el('thead', null, el('tr', null, el('th', { text: 'Peer' }), el('th', { text: 'TVL' }), el('th', { text: 'Market cap' }), el('th', { text: 'Multiple' }))),
+              el('tbody', null, row.peers.map(function (p) {
+                return el('tr', null,
+                  el('td', { text: p.name }),
+                  el('td', { text: fmtUsd(p.tvl_usd) }),
+                  el('td', { text: fmtUsd(p.mcap_usd) }),
+                  el('td', { text: 'x' + p.multiple.toFixed(3) }));
+              }))
+            )
+          )
+        : el('p', { class: 'match', text: row.peers.length === 1
+            ? 'Only one live-token peer in ' + (row.category || 'its category') + ' (' + row.peers[0].name + ', x' + row.peers[0].multiple.toFixed(3) + '), so no spread to measure: the range is the model\u2019s own typical out-of-sample error (x3.49) around the point estimate.'
+            : 'No live-token peer in ' + (row.category || 'its category') + ', so no spread to measure: the range is the model\u2019s own typical out-of-sample error (x3.49) around the point estimate.' })
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm economics' }),

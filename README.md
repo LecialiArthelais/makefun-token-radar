@@ -46,7 +46,7 @@ sit above the floor without being named on the watchlist, and the board ranks
 them too. The house rule's parentProtocol leg is not one of the snapshot's ten
 fields, so it cannot be checked here; the board states that.
 
-## The model (sonar-4)
+## The model (sonar-5)
 
 A Theil-Sen log-log curve of market cap on TVL, fitted at run time to the
 snapshot's own 128 live-token protocols with a positive market cap (the 16
@@ -61,6 +61,19 @@ age multiplier    = 10 ^ (k x (log10(age_days + 1) - 3.0004)),
 implied           = round(tvl_usd x curve multiple
                           x (1 + clamp(change_7d, -60, 120) / 100 x 0.25)
                           x age multiplier)
+range             = the same TVL carried through the p25-p75 multiples of
+                    the protocol's nearest live-token peers in its own
+                    category (up to five, nearest in log TVL), through the
+                    same growth and age multipliers; with fewer than two
+                    peers the range is the model's own typical out-of-sample
+                    error (x3.49) around the point estimate. The range always
+                    contains the point estimate.
+score             = an explainable 0-100 composite, four sub-scores of 0-25:
+                    scale (log TVL over the board's range), momentum
+                    (seven-day growth, centred on flat), maturity (log age
+                    over the board's oldest), confidence (12.5 for the global
+                    curve plus up to 12.5 for category peers that agree).
+                    The score never changes the implied value.
 ```
 
 No protocol name is special-cased, and no coefficient is hardcoded: the
@@ -81,6 +94,7 @@ the actual market cap.
 
 | Model | CV median error | CV hit (2x) | Holdout median error |
 |---|---|---|---|
+| sonar-5: curve + growth 0.25 + age, range + score | 85.6% | 28.2% | 82.7% |
 | sonar-4: Theil-Sen curve + growth 0.25 + age | 85.6% | 28.2% | 82.7% |
 | sonar-3: Theil-Sen curve + growth 0.25 | 85.1% | 28.2% | 82.7% |
 | Theil-Sen curve only | 85.0% | 28.2% | 82.3% |
@@ -96,6 +110,14 @@ ask for. The age multiplier costs 0.5 points of CV median error (85.6% vs
 85.1%) while the holdout is unchanged (82.7%) — the price of making the value
 follow from age as well as TVL and growth. Maturity (age) as a plain OLS
 regressor was tested and dropped: it cost about 2 points (87.3% vs 85.1%).
+Sonar-5 adds the implied-value range and the composite score; neither moves
+the point estimate, so its CV and holdout are sonar-4's, re-labelled. What
+they add is auditability: the range says how wide the category's own
+multiples spread around the point, and the score says, in four named parts,
+why a row ranks where it does. Outlier trimming of the training comps was
+tested and rejected: it cost 2.4-3.0 points of CV median error (88.0-88.6%
+vs 85.6%) — the Theil-Sen fit is already robust, and trimming only removes
+information.
 Age still decides the farm hold. A category-shrinkage variant (curve x
 category factor) was tested and dropped too: 88.1%, worse than the plain
 global curve. Trimming the training comps by mcap/TVL multiple (the outer
