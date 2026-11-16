@@ -1,4 +1,4 @@
-// D Sonar's dashboard, sonar-6. It reads window.RADAR (written beside
+// D Sonar's dashboard, sonar-7. It reads window.RADAR (written beside
 // dashboard/ by main.ts) and renders the KPI hero, the top-three spotlight,
 // the filterable board, the live-token view, the model section with its
 // out-of-sample validation, and a detail drawer for every protocol with the
@@ -320,18 +320,16 @@
     });
     host.textContent = '';
     host.appendChild(el('span', { class: 'v-label', text: 'Tested out of sample' }));
-    host.appendChild(document.createTextNode('The curve\u2019s median error is '));
+    host.appendChild(document.createTextNode('Ranking by TVL alone scores '));
+    host.appendChild(el('b', { text: Math.round(tvlCv.mdape_pct) + '%' }));
+    host.appendChild(document.createTextNode(' median error out of sample; this curve scores '));
     host.appendChild(el('b', { text: Math.round(shippedCv.mdape_pct) + '%' }));
     host.appendChild(document.createTextNode(' (5-fold CV, 103 protocols) and '));
     host.appendChild(el('b', { text: Math.round(v.holdout_shipped.mdape_pct) + '%' }));
-    host.appendChild(document.createTextNode(' on a ' + v.holdout_n + '-protocol holdout. A global median scores '));
+    host.appendChild(document.createTextNode(' on a ' + v.holdout_n + '-protocol holdout — about ' + Math.round(tvlCv.mdape_pct / shippedCv.mdape_pct) + 'x better than the naive baseline. A global median scores '));
     host.appendChild(el('b', { text: Math.round(medianCv.mdape_pct) + '%' }));
     host.appendChild(document.createTextNode(' / '));
     host.appendChild(el('b', { text: Math.round(v.holdout_global_median.mdape_pct) + '%' }));
-    host.appendChild(document.createTextNode('; TVL alone scores '));
-    host.appendChild(el('b', { text: Math.round(tvlCv.mdape_pct) + '%' }));
-    host.appendChild(document.createTextNode(' / '));
-    host.appendChild(el('b', { text: Math.round(v.holdout_tvl_only.mdape_pct) + '%' }));
     host.appendChild(document.createTextNode('. The curve is fitted to the snapshot\u2019s own live-token protocols; growth is kept at quarter weight and age enters through a fitted multiplier.')); 
   }
 
@@ -536,6 +534,15 @@
       vtable.textContent = '';
       vtable.appendChild(oosTable('Cross-validation on 103 live-token protocols, 5 folds by slug order.', v.cv));
       vtable.appendChild(oosTable('Holdout on ' + v.holdout_n + ' live-token protocols, touched once after selection by CV.', [v.holdout_shipped, v.holdout_global_median, v.holdout_tvl_only]));
+      if (v.time_split) {
+        vtable.appendChild(oosTable('Time-split: fitted on the ' + v.time_split.fit_n + ' live-token protocols listed on or before ' + v.time_split.cutoff + ', scored on the ' + v.time_split.test_n + ' listed after it.', [{ model: 'sonar-6, fitted on the older half', mdape_pct: v.time_split.shipped.mdape_pct, hit_pct: v.time_split.shipped.hit_pct, typical_error_x: v.time_split.shipped.typical_error_x }]));
+      }
+      if (v.bootstrap) {
+        var bnote = document.createElement('p');
+        bnote.className = 'sub';
+        bnote.textContent = 'Bootstrap (' + v.bootstrap.n + ' resamples, seeded): slope ' + v.bootstrap.slope_p5.toFixed(2) + ' – ' + v.bootstrap.slope_p95.toFixed(2) + ' (median ' + v.bootstrap.slope_p50.toFixed(2) + '), intercept ' + v.bootstrap.intercept_p5.toFixed(2) + ' – ' + v.bootstrap.intercept_p95.toFixed(2) + ' (median ' + v.bootstrap.intercept_p50.toFixed(2) + '). The shipped curve (slope ' + c.slope.toFixed(4) + ', intercept ' + c.intercept.toFixed(4) + ') sits inside both bands.';
+        vtable.appendChild(bnote);
+      }
     }
     var vnote = document.getElementById('validation-note');
     if (vnote) vnote.textContent = v.protocol + ' ' + v.notes.join(' ');

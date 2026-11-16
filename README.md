@@ -46,7 +46,7 @@ sit above the floor without being named on the watchlist, and the board ranks
 them too. The house rule's parentProtocol leg is not one of the snapshot's ten
 fields, so it cannot be checked here; the board states that.
 
-## The model (sonar-6)
+## The model (sonar-7)
 
 A Theil-Sen log-log curve of market cap on TVL, fitted at run time to the
 snapshot's own 128 live-token protocols with a positive market cap (the 16
@@ -94,6 +94,7 @@ the actual market cap.
 
 | Model | CV median error | CV hit (2x) | Holdout median error |
 |---|---|---|---|
+| sonar-7: curve + growth 0.25 + age, range + score, playbooks, time-split | 85.6% | 28.2% | 82.7% |
 | sonar-6: curve + growth 0.25 + age, range + score, playbooks | 85.6% | 28.2% | 82.7% |
 | sonar-5: curve + growth 0.25 + age, range + score | 85.6% | 28.2% | 82.7% |
 | sonar-4: Theil-Sen curve + growth 0.25 + age | 85.6% | 28.2% | 82.7% |
@@ -123,7 +124,20 @@ position, a prediction market takes a new position, a bridge crosses again —
 instead of one template for all 198 rows. Across the board that is 74
 distinct weekly actions and 4 distinct claim steps, all derived from the
 protocol's own category, never from a hand-written list of names. The
-playbooks do not move the point estimate either. Outlier trimming of the training comps was
+playbooks do not move the point estimate either. Sonar-7 adds two stability
+checks that do not move the point estimate either: a time-split (the curve
+and the age fit fitted on the 47 live-token protocols listed on or before
+2024-02-18 and scored on the 48 listed after it — 89.4% median error, so
+the curve holds up on protocols listed after the fit) and a bootstrap (200
+seeded resamples; slope 0.41–0.73, intercept 1.47–3.92, and the shipped
+curve sits inside both bands). The validation strip now leads with the
+comparison that matters: ranking by TVL alone scores 412% median error,
+this curve scores 86% — about 5x better than the naive baseline.
+Family-level fitting was investigated and rejected: the sealed snapshot
+carries no parentProtocol field, name-based grouping finds 128 distinct
+families (no grouping at all), and the only shared symbol (BIFI) is two
+different protocols. A family fit would need data outside the snapshot,
+which the rules do not allow. Outlier trimming of the training comps was
 tested and rejected: it cost 2.4-3.0 points of CV median error (88.0-88.6%
 vs 85.6%) — the Theil-Sen fit is already robust, and trimming only removes
 information.

@@ -1,4 +1,4 @@
-// D Sonar's signal model, sonar-6: one sealed snapshot in, one ranked board out.
+// D Sonar's signal model, sonar-7: one sealed snapshot in, one ranked board out.
 //
 // The board ranks pre-token protocols by what their token would be worth if the
 // protocol's record stayed as it is. The value is not a prediction of a launch;
@@ -152,7 +152,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'sonar-6';
+export const MODEL_VERSION = 'sonar-7';
 
 /** How many live-token protocols the live-token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -321,6 +321,7 @@ export interface CvRow {
  * validateHoldout); the CV table is the experiment's recorded result.
  */
 export const VALIDATION_CV: CvRow[] = [
+  { model: 'sonar-7: curve + growth 0.25 + age, range + score, playbooks, time-split', mdape_pct: 85.6, hit_pct: 28.2, typical_error_x: 3.49 },
   { model: 'sonar-6: curve + growth 0.25 + age, range + score, playbooks', mdape_pct: 85.6, hit_pct: 28.2, typical_error_x: 3.49 },
   { model: 'sonar-5: curve + growth 0.25 + age, range + score', mdape_pct: 85.6, hit_pct: 28.2, typical_error_x: 3.49 },
   { model: 'sonar-4: Theil-Sen curve + growth 0.25 + age', mdape_pct: 85.6, hit_pct: 28.2, typical_error_x: 3.49 },
@@ -341,6 +342,23 @@ export interface ValidationResult {
   holdout_shipped: CvRow;
   holdout_global_median: CvRow;
   holdout_tvl_only: CvRow;
+  time_split: {
+    fit_n: number;
+    test_n: number;
+    cutoff: string;
+    shipped: { mdape_pct: number; hit_pct: number; typical_error_x: number };
+    slope: number;
+    intercept: number;
+  };
+  bootstrap: {
+    n: number;
+    slope_p5: number;
+    slope_p50: number;
+    slope_p95: number;
+    intercept_p5: number;
+    intercept_p50: number;
+    intercept_p95: number;
+  };
   fit: CurveFit;
   live_examples: { name: string; tvl_usd: number; mcap_usd: number; curve_implied_usd: number }[];
   notes: string[];
@@ -1092,6 +1110,95 @@ export function validateHoldout(snapshot: Snapshot, model: ModelConstants = MODE
   };
 }
 
+/**
+ * The time-split check, recomputed by the program at run time: the live-token
+ * protocols that carry a listed_at date (95 of 128), split at the median
+ * listing date; the curve and the age fit are fitted on the older half only,
+ * then the shipped model is scored on the newer half. A curve that only fits
+ * the past would fall apart here; a stable one holds up on protocols listed
+ * after the fit. The 33 live protocols with no listed_at date cannot be
+ * split by time and are left out of this check.
+ */
+export function validateTimeSplit(snapshot: Snapshot, model: ModelConstants = MODEL): {
+  fit_n: number;
+  test_n: number;
+  cutoff: string;
+  shipped: { mdape_pct: number; hit_pct: number; typical_error_x: number };
+  slope: number;
+  intercept: number;
+} {
+  const { live } = liveForFit(snapshot.protocols);
+  const dated = live.filter((p) => p.listed_at !== null).sort((a, b) => (a.listed_at! < b.listed_at! ? -1 : a.listed_at! > b.listed_at! ? 1 : 0));
+  const mid = Math.floor(dated.length / 2);
+  const older = dated.slice(0, mid);
+  const newer = dated.slice(mid);
+  const cutoff = newer.length > 0 ? newer[0]!.listed_at!.slice(0, 10) : '';
+  const fit = fitCurve(older);
+  const ageFit = fitAge(older, snapshot.as_of, fit, model);
+  const shipped = newer.map((p) => ({ pred: impliedValue(p, snapshot.as_of, fit, ageFit, model).implied, actual: p.mcap_usd! }));
+  return {
+    fit_n: older.length,
+    test_n: newer.length,
+    cutoff,
+    shipped: oosMetrics(shipped),
+    slope: round4(fit.slope),
+    intercept: round4(fit.intercept),
+  };
+}
+
+/** A deterministic seeded PRNG (mulberry32) for the bootstrap: the same seed, the same resamples, every run. */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * The bootstrap stability check, recomputed by the program at run time: 200
+ * resamples of the 128 live-token protocols with replacement (seeded, so the
+ * result is byte-identical every run), the Theil-Sen curve refitted on each,
+ * and the 5th/50th/95th percentiles of the slope and intercept reported. A
+ * narrow band means the curve's shape is not one protocol's doing; a wide
+ * band would say the fit is fragile.
+ */
+export function bootstrapCurve(snapshot: Snapshot): {
+  n: number;
+  slope_p5: number;
+  slope_p50: number;
+  slope_p95: number;
+  intercept_p5: number;
+  intercept_p50: number;
+  intercept_p95: number;
+} {
+  const { live } = liveForFit(snapshot.protocols);
+  const rand = mulberry32(20261116);
+  const slopes: number[] = [];
+  const intercepts: number[] = [];
+  for (let b = 0; b < 200; b++) {
+    const sample: SnapshotProtocol[] = [];
+    for (let i = 0; i < live.length; i++) sample.push(live[Math.floor(rand() * live.length)]!);
+    const fit = fitCurve(sample);
+    slopes.push(fit.slope);
+    intercepts.push(fit.intercept);
+  }
+  slopes.sort((a, b) => a - b);
+  intercepts.sort((a, b) => a - b);
+  return {
+    n: 200,
+    slope_p5: round4(percentileOf(slopes, 0.05)),
+    slope_p50: round4(percentileOf(slopes, 0.5)),
+    slope_p95: round4(percentileOf(slopes, 0.95)),
+    intercept_p5: round4(percentileOf(intercepts, 0.05)),
+    intercept_p50: round4(percentileOf(intercepts, 0.5)),
+    intercept_p95: round4(percentileOf(intercepts, 0.95)),
+  };
+}
+
 /** Everything the dashboard renders, from the snapshot. */
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL, opts: { economics?: boolean } = {}): { board: BoardRow[]; radar: RadarData } {
   const board = buildBoard(snapshot, model, opts);
@@ -1100,6 +1207,8 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL, op
   const live = liveRows(snapshot);
   const early = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
   const holdout = validateHoldout(snapshot, model);
+  const timeSplit = validateTimeSplit(snapshot, model);
+  const bootstrap = bootstrapCurve(snapshot);
   const examples = [10_000_000, 100_000_000, 1_000_000_000, 5_000_000_000].map((tvl) => {
     const multiple = curveMultiple(tvl, fit, model);
     return { tvl_usd: tvl, multiple: round4(multiple), implied_usd: Math.max(1, Math.round(tvl * multiple)) };
@@ -1129,9 +1238,11 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL, op
         '128 live-token protocols with a positive market cap, sorted by slug. 5-fold cross-validation on 103 (folds by index i % 5); a 25-protocol holdout (i % 5 === 4) touched once, after selection by CV. Median absolute percentage error; hit = prediction within 2x of the actual market cap.',
       cv: VALIDATION_CV,
       holdout_n: holdout.n,
-      holdout_shipped: { model: 'sonar-6: curve + growth 0.25 + age, range + score, playbooks', ...holdout.shipped },
+      holdout_shipped: { model: 'sonar-7: curve + growth 0.25 + age, range + score, playbooks, time-split', ...holdout.shipped },
       holdout_global_median: { model: 'Global median', ...holdout.global_median },
       holdout_tvl_only: { model: 'TVL only (multiple 1.0)', ...holdout.tvl_only },
+      time_split: timeSplit,
+      bootstrap,
       fit,
       live_examples: liveExamples(snapshot, fit, model),
       notes: [
@@ -1141,6 +1252,8 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL, op
         'A category-shrinkage variant (curve x category factor) was tested and dropped: 88.1%, worse than the plain global curve.',
         'The implied value is a point estimate with a range: the p25-p75 multiples of the protocol\'s nearest live-token peers in its own category (up to five, nearest in log TVL), carried through the same growth and age multipliers. With fewer than two peers the range is the model\'s own typical out-of-sample error (x3.49) around the point estimate — an honest width, not a narrower number invented from nothing.',
         'The 0-100 score is four named sub-scores of 0-25 each (scale, momentum, maturity, confidence), all from the snapshot\'s own figures; it presents the same figures the value already uses and never changes the implied value.',
+        'Time-split: the curve and the age fit are fitted on the older half of the 95 live-token protocols that carry a listed_at date and scored on the newer half (listed after the median date). A curve that only fits the past would fall apart on the newer half.',
+        'Bootstrap: 200 resamples of the 128 live-token protocols with replacement (seeded, so the result is byte-identical every run), the curve refitted on each. The slope and intercept bands say how much the fit moves when the sample moves.',
       ],
     },
     farm: {
