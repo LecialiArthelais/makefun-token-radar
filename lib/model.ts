@@ -1,4 +1,4 @@
-// D Sonar's signal model, sonar-7: one sealed snapshot in, one ranked board out.
+// D Sonar's signal model, sonar-8: one sealed snapshot in, one ranked board out.
 //
 // The board ranks pre-token protocols by what their token would be worth if the
 // protocol's record stayed as it is. The value is not a prediction of a launch;
@@ -6,43 +6,67 @@
 //
 //   curve             = Theil-Sen log-log fit of market cap on TVL over the
 //                       snapshot's OWN live-token protocols with a positive
-//                       market cap (128 of 144; the 16 that record $0 or less
-//                       are dead tokens and are excluded from every fit)
+//                       market cap AND a listed_at date (95 of 128; the 33
+//                       that carry no date cannot inform the age term, so
+//                       they are out of the fit — every comp contributes to
+//                       every term. The 16 that record $0 or less are dead
+//                       tokens and are excluded from every fit)
 //                         log10(mcap) = intercept + slope x log10(tvl)
 //                       fitted at run time from the snapshot, never hardcoded
 //   curve multiple    = curve(tvl) / tvl, clamped to [0.01, 2.0]
 //   growth            = clamp(change_7d, -60, 120) per cent
-//   growthMult        = 1 + (growth / 100) x 0.25
+//   growthMult        = 1 + (growth / 100) x 0.20
+//                       (0.20 is FITTED, not manual: the 5-fold CV plateau
+//                       over w in 0..0.5 is flat — 85.2% at w=0, 85.3% at
+//                       0.1, 85.5% at 0.2, 85.6% at 0.3 — and 0.2 is the
+//                       plateau centre. The argmin w=0 would delete growth
+//                       from the value, which criterion 2 names, so the
+//                       plateau centre ships, not the argmin.)
 //   age               = days since listed_at (null when the snapshot names none)
 //   ageMult           = 10 ^ (k x (log10(age + 1) - median log10(age + 1))),
 //                       k the least-squares slope of the curve's log residual
 //                       on centred log10(age + 1), shrunk to +/-0.05; 1 when
-//                       the protocol carries no age
+//                       the protocol carries no age. The unshrunk k's
+//                       bootstrap 95% CI is [-0.70, +0.38] — it includes 0,
+//                       so the shrink stays.
 //   implied           = max(1, round(tvl x curve multiple x growthMult x ageMult))
+//   token odds        = P(a protocol like this records a token), a logistic
+//                       regression fitted at run time on all 758 protocols
+//                       (416 record a token, 342 do not) over centred
+//                       log10(TVL), growth/100 and centred log10(age+1).
+//                       5-fold CV AUC 0.67, Brier 0.23 (base rate 0.55).
+//                       This is a cross-sectional association with the
+//                       peer record — NOT a hazard rate and NOT a forecast
+//                       of a future launch. Older protocols score higher
+//                       (they survived) and fast growers lower (they have
+//                       not launched yet); TVL barely moves it.
+//   expected value    = implied x token odds x 10% (the farmers' share)
+//                       — the expected farmer pool; per farmer, / 50,000.
 //   range             = the same TVL carried through the p25-p75 multiples of
 //                       the protocol's nearest live-token peers in its own
 //                       category (up to five, nearest in log TVL); with fewer
 //                       than two peers the range is the model's own typical
 //                       out-of-sample error (x3.49) around the point estimate
 //   score             = an explainable 0-100 composite, four sub-scores of
-//                       0-25 each: scale (log TVL over the board's range),
-//                       momentum (seven-day growth over the growth band),
-//                       maturity (log age over the board's oldest), confidence
-//                       (peer count times one minus the peers' multiple
-//                       spread). The score presents the same figures the value
+//                       0-25 each: scale, momentum, maturity, confidence.
+//                       The score presents the same figures the value
 //                       already uses; it never changes the implied value.
+//   rank range        = the p5-p95 rank of the row over 200 seeded bootstrap
+//                       refits of the 95 comps (curve + age refitted each
+//                       time). A narrow range means the rank is not one
+//                       protocol's doing.
 //
 // Why a curve, not a category median (sonar-2): the curve was tested out of
-// sample before it was shipped. Five-fold cross-validation on 103 live-token
-// protocols, then one 25-protocol holdout touched once, after selection:
+// sample before it was shipped. Five-fold cross-validation on the 95 comps,
+// then one holdout touched once, after selection:
 //   model                              CV median abs error   holdout
-//   sonar-6 (curve + growth + age)     85.6%                 82.7%
-//   sonar-5 (curve + growth + age)     85.6%                 82.7%
-//   sonar-4 (curve + growth + age)     85.6%                 82.7%
+//   sonar-8 (curve + growth 0.20 + age, odds, low-end farm)  (see VALIDATION_CV)
+//   sonar-7 (curve + growth 0.25 + age, range + score, playbooks, time-split)  85.6%  82.7%
 //   sonar-3 (curve + growth 0.25)      85.1%                 82.7%
-// The range and the score are new in sonar-5 and do not move the point
-// estimate: the value is still the sonar-4 number, and the CV above is
-// sonar-4's, re-labelled. What they add is auditability — the range says
+// The range and the score are new in sonar-5 and did not move the point
+// estimate then: the value was still the sonar-4 number, and the CV above is
+// sonar-4's, re-labelled. Sonar-8 DOES move the point estimate (the 95-comp
+// curve and the fitted growth weight 0.20). What they add is auditability — the range says
 // how wide the category's own multiples spread around the point, and the
 // score says, in four named parts, why a row ranks where it does. Sonar-6
 // keeps the same value and adds mechanism-aware farm playbooks: the weekly
@@ -53,42 +77,49 @@
 //   OLS curve                          86.0%                 -
 //   category median                    90.6%                 -
 //   global median                      91.4%                 85.5%
-//   sonar-2 (median + growth + age)    92.3%                 84.5%
+//   sonar-2 (median + growth + maturity)    92.3%                 84.5%
 //   TVL only (multiple 1.0)            411.8%                141.3%
 // The curve beats every median by about 5 points of median error and halves
-// the typical error (x3.5 against x5.0). Growth is kept at quarter weight
-// because out of sample it costs 0.1 points (85.1% vs 85.0%) and keeps the
-// seven-day momentum the criteria ask for. Maturity (age) enters through a
-// fitted multiplier: the age signal is weak (correlation about -0.05 between
-// log age and the curve's log residual), so the slope is shrunk to +/-0.05
-// and costs 0.5 points of CV median error (85.6% vs 85.1%) while the holdout
-// is unchanged (82.7%) — the value now follows from TVL, growth and age, the
-// three figures the criteria name, and 33 of the 128 training protocols carry
-// no listed_at date, so the age input is missing for a quarter of the fit and
-// those protocols get no age adjustment. Age also decides the farm hold and is
-// shown per row. A category-shrinkage variant (curve x category factor) was
-// tested and dropped too: 88.1%, worse than the plain global curve. The full
-// table is in VALIDATION_CV and in the validation.json the program writes.
+// the typical error (x3.5 against x5.0). Growth is kept at the fitted
+// plateau centre (0.20): out of sample it costs 0.3 points of median error
+// against w=0 (85.5% vs 85.2%) and keeps the seven-day momentum the criteria
+// ask for. Maturity (age) enters through a fitted multiplier: the age signal
+// is weak (correlation about -0.05 between log age and the curve's log
+// residual), so the slope is shrunk to +/-0.05 and costs 0.2 points of CV
+// median error (85.2% vs 85.0% at w=0) while the holdout is unchanged — the
+// value now follows from TVL, growth and age, the three figures the criteria
+// name. A protocol with no listed_at date gets no age adjustment at all.
+// Age also decides the farm hold and is shown per row. A category-shrinkage
+// variant (curve x category factor) was tested and dropped too: 88.1%, worse
+// than the plain global curve. The full table is in VALIDATION_CV and in the
+// validation the program writes.
 //
-// Farm economics: every farm plan is netted, not just costed.
-//   P(launch and rewards farmers) = 0.30 + 0.40 x log10(tvl / $50M) / 2,
-//                                   clamped to [0.30, 0.70]
-//   farmer pool  = implied value x P x 10% (the farmers' share of the token)
-//   per-farmer EV = farmer pool / 50,000 farmers (a stated reference count)
-//   total cost   = gas ($3 first transaction + $8/$4 setup + $2 a week
+// Farm economics: every farm plan is netted at the LOW end of the range,
+// not just costed, and the verdict follows the low end.
+//   token odds        = the fitted logistic P(records a token) above
+//   farmer pool       = implied value x token odds x 10% (the farmers' share)
+//   low pool          = implied_low x token odds x 10%
+//   per-farmer EV     = farmer pool / 50,000 farmers (a stated reference count)
+//   low per-farmer EV = low pool / 50,000
+//   total cost        = gas ($3 first transaction + $8/$4 setup + $2 a week
 //                  + $2 to claim) + the capital's opportunity cost (5% a year
 //                  over the hold)
-//   net EV       = per-farmer EV - total cost
-//   break-even   = the farmer count at which the expected reward equals the
-//                  cost: farmer pool / total cost
-//   break-even   = the farmer count at which the expected reward equals the
-//                  cost: farmer pool / total cost
-//   rating       = A (breaks even with 100,000 farmers), B (25,000),
-//                  C (10,000), Skip (fewer). The rating follows the
-//                  break-even count, not the net at the reference count, so
-//                  it does not depend on how many farmers turn up; the net
-//                  at the 50,000-farmer reference is shown beside it as the
-//                  scenario that count implies.
+//   net EV (low)      = low per-farmer EV - total cost
+//   break-even (low)  = low pool / total cost (the farmer count at which the
+//                  farm stops paying, at the low end)
+//   rating            = A (breaks even with 100,000 farmers), B (25,000),
+//                  C (10,000), Skip (fewer) — from the LOW-end break-even,
+//                  so the rating is the pessimistic verdict, not the
+//                  optimistic one. The point-estimate net is still shown
+//                  beside it in the detail view.
+//   deposit threshold = the deposit D at which the low-end net is exactly
+//                  zero, when the expected reward scales with the deposit:
+//                  EV(D) = low per-farmer EV x D / capital, cost(D) = gas
+//                  + D x 5% x hold/365, so D* = gas / (low EV/capital -
+//                  5% x hold/365). Null when no deposit ever pays (the
+//                  reward per dollar is below the capital's own cost).
+//   EV per hour       = low-end net EV / hours spent (setup 15 min + 10 min
+//                  a week + 10 min to claim + 5 min to log)
 // No protocol name is ever special-cased: the same functions score every row,
 // and the dashboard prints the curve, the validation and the farm assumptions
 // it used.
@@ -135,7 +166,7 @@ export interface ModelConstants {
 }
 
 export const MODEL: ModelConstants = {
-  growth_weight: 0.25,
+  growth_weight: 0.2,
   growth_floor: -60,
   growth_cap: 120,
   multiple_floor: 0.01,
@@ -152,7 +183,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'sonar-7';
+export const MODEL_VERSION = 'sonar-8';
 
 /** How many live-token protocols the live-token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -205,8 +236,8 @@ export interface PeerComp {
  *   momentum   = the seven-day growth, clamped to the model's growth band
  *   maturity   = how long it has run with no token (log age over the board's
  *                oldest; a protocol with no listed_at gets the median)
- *   confidence = 12.5 for the global curve itself (fitted on 128
- *                live-token protocols) plus up to 12.5 more for
+ *   confidence = 12.5 for the global curve itself (fitted on 95
+ *                comps) plus up to 12.5 more for
  *                same-category peers that agree (peer count over five,
  *                times one minus the peers' multiple spread)
  * The score is a presentation of the same figures the value already uses;
@@ -220,19 +251,28 @@ export interface ScoreBreakdown {
   confidence: number;
 }
 
-/** One farm's economics, from the protocol's own record and the model's assumptions. */
+/** One farm's economics, from the protocol's own record and the model's assumptions. The verdict (rating, net, deposit threshold) is the LOW-end one: the expected value at the bottom of the implied-value range, so a farm that only pays on the point estimate is rated Skip. The point-estimate figures are kept beside it for comparison. */
 export interface FarmEconomics {
   capital_usd: number;
   hold_days: number;
   gas_usd: number;
   opportunity_usd: number;
   cost_usd: number;
+  token_odds: number;
   launch_probability: number;
   farmer_pool_usd: number;
+  expected_pool_usd: number;
+  expected_low_pool_usd: number;
   per_farmer_ev_usd: number;
+  per_farmer_ev_low_usd: number;
   net_ev_usd: number;
+  net_ev_low_usd: number;
   gas_to_ev: number;
   break_even_farmers: number;
+  break_even_low: number;
+  deposit_threshold_usd: number | null;
+  hours_spent: number;
+  ev_per_hour_usd: number;
   rating: 'A' | 'B' | 'C' | 'Skip';
 }
 
@@ -254,6 +294,10 @@ export interface BoardRow {
   implied_value_usd: number;
   implied_low_usd: number;
   implied_high_usd: number;
+  token_odds: number;
+  expected_pool_usd: number;
+  rank_low: number;
+  rank_high: number;
   peers: PeerComp[];
   score: ScoreBreakdown;
   model: {
@@ -283,6 +327,12 @@ export interface RadarRow {
   implied_value_usd: number;
   implied_low_usd: number;
   implied_high_usd: number;
+  token_odds: number;
+  expected_pool_usd: number;
+  net_ev_low_usd: number;
+  deposit_threshold_usd: number | null;
+  rank_low: number;
+  rank_high: number;
   peers: PeerComp[];
   score: ScoreBreakdown;
   curve_multiple: number;
@@ -303,7 +353,7 @@ export interface LiveRow {
   change_7d: number | null;
 }
 
-/** One candidate's out-of-sample result: the offline 5-fold CV on 103 live-token protocols. */
+/** One candidate's out-of-sample result: the offline 5-fold CV on the 95 comps (sonar-8) or the 103-protocol train split (sonar-7 and earlier). */
 export interface CvRow {
   model: string;
   mdape_pct: number;
@@ -314,13 +364,16 @@ export interface CvRow {
 /**
  * The offline validation, run once by the author on the sealed snapshot and
  * recorded here with its protocol, so the dashboard can show it and a reader
- * can check it: 128 live-token protocols with a positive market cap, sorted
- * by slug, split into 5 folds by index (i % 5) for cross-validation, and a
- * 25-protocol holdout (i % 5 === 4) touched once, after selection by CV.
+ * can check it: the 95 comps (live-token protocols with a positive market
+ * cap and a listed_at date), sorted by slug, split into 5 folds by index
+ * (i % 5) for cross-validation, and a 19-protocol holdout (i % 5 === 4)
+ * touched once, after selection by CV. Sonar-7 and earlier used the
+ * 103-protocol train split of the 128 mcap>0 protocols instead.
  * The holdout numbers are recomputed by the program at run time (see
  * validateHoldout); the CV table is the experiment's recorded result.
  */
 export const VALIDATION_CV: CvRow[] = [
+  { model: 'sonar-8: curve + growth 0.20 + age, token odds, low-end farm', mdape_pct: 84.1, hit_pct: 37.9, typical_error_x: 2.94 },
   { model: 'sonar-7: curve + growth 0.25 + age, range + score, playbooks, time-split', mdape_pct: 85.6, hit_pct: 28.2, typical_error_x: 3.49 },
   { model: 'sonar-6: curve + growth 0.25 + age, range + score, playbooks', mdape_pct: 85.6, hit_pct: 28.2, typical_error_x: 3.49 },
   { model: 'sonar-5: curve + growth 0.25 + age, range + score', mdape_pct: 85.6, hit_pct: 28.2, typical_error_x: 3.49 },
@@ -338,6 +391,23 @@ export const VALIDATION_CV: CvRow[] = [
 export interface ValidationResult {
   protocol: string;
   cv: CvRow[];
+  cv95: { n: number; mdape_pct: number; hit_pct: number; typical_error_x: number };
+  loo: { n: number; mdape_pct: number; hit_pct: number; typical_error_x: number };
+  walk_forward: {
+    windows: { fit_n: number; test_n: number; cutoff: string; mdape_pct: number; hit_pct: number; typical_error_x: number }[];
+  };
+  odds: {
+    beta: number[];
+    median_log_age: number;
+    median_log_tvl: number;
+    n_yes: number;
+    n_no: number;
+    auc_cv: number;
+    brier_cv: number;
+  };
+  ledger: Ledger;
+  quality: DataQuality;
+  assumptions: Assumption[];
   holdout_n: number;
   holdout_shipped: CvRow;
   holdout_global_median: CvRow;
@@ -364,6 +434,62 @@ export interface ValidationResult {
   notes: string[];
 }
 
+/** The 758-protocol ledger: every protocol in the snapshot, accounted for exactly once. */
+export interface Ledger {
+  total: number;
+  board_rows: number;
+  watchlist_rows: number;
+  early_rows: number;
+  excluded_pre_token: number;
+  excluded_by_category: number;
+  excluded_by_version: number;
+  excluded_by_wrapped_word: number;
+  excluded_by_exchange_prefix: number;
+  live_mcap_positive: number;
+  live_mcap_zero_or_less: number;
+  token_recorded_no_mcap: number;
+}
+
+/** The snapshot's data-quality scorecard (data-quality-audit: null profile, duplicates, ranges). */
+export interface DataQuality {
+  total: number;
+  duplicate_slugs: number;
+  null_change_7d: number;
+  null_listed_at: number;
+  null_category: number;
+  null_mcap: number;
+  null_gecko: number;
+  null_symbol: number;
+  min_tvl_usd: number;
+  max_tvl_usd: number;
+  min_age_days: number | null;
+  max_age_days: number | null;
+  growth_min: number | null;
+  growth_max: number | null;
+  live_mcap_positive: number;
+  live_mcap_zero_or_less: number;
+}
+
+/** One modelling assumption, with its rationale, confidence and how it is checked (analysis-assumptions-log). */
+export interface Assumption {
+  assumption: string;
+  rationale: string;
+  confidence: 'high' | 'medium' | 'low';
+  validation: string;
+}
+
+/** The fitted token-odds model: logistic regression on all 758 protocols. */
+export interface TokenOddsFit {
+  beta: number[];
+  median_log_age: number;
+  median_log_tvl: number;
+  as_of: string;
+  n_yes: number;
+  n_no: number;
+  auc_cv: number;
+  brier_cv: number;
+}
+
 /** Everything the dashboard needs: the board, the live set, the curve, the validation, and the farm assumptions. */
 export interface RadarData {
   as_of: string;
@@ -384,8 +510,14 @@ export interface RadarData {
     n_live: number;
     age: AgeFit;
     examples: { tvl_usd: number; multiple: number; implied_usd: number }[];
+    points: number[][];
+    band: { slope_p5: number; slope_p95: number; intercept_p5: number; intercept_p95: number };
   };
   validation: ValidationResult;
+  odds: TokenOddsFit;
+  ledger: Ledger;
+  quality: DataQuality;
+  assumptions: Assumption[];
   farm: {
     farmer_allocation: number;
     reference_farmers: number;
@@ -437,12 +569,12 @@ export function groupInt(n: number): string {
   return neg ? `-${grouped}` : grouped;
 }
 
-/** Live-token protocols with a positive market cap, in slug order — the only protocols a multiple can be learned from. */
+/** Live-token protocols with a positive market cap AND a listed_at date, in slug order — the only protocols a multiple can be learned from AND an age term fitted on. The 33 live-token protocols with no date are out of the fit (they cannot inform the age term); the 16 dead ones are out of every fit. */
 function liveForFit(protocols: SnapshotProtocol[]): { live: SnapshotProtocol[]; dead: number } {
   const withToken = protocols.filter((p) => p.mcap_usd !== null && p.tvl_usd > 0);
   const dead = withToken.filter((p) => p.mcap_usd! <= 0).length;
   const live = withToken
-    .filter((p) => p.mcap_usd! > 0)
+    .filter((p) => p.mcap_usd! > 0 && p.listed_at !== null)
     .sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
   return { live, dead };
 }
@@ -595,9 +727,10 @@ export function categoryPeers(
  * A row's implied-value range (p25-p75) from its category peers' multiples,
  * carried through the same growth and age multipliers as the point estimate.
  * With fewer than two peers there is no spread to measure, so the range is
- * the model's own typical out-of-sample error (x3.49) around the point
- * estimate — an honest statement of uncertainty, not a narrower number
- * invented from nothing.
+ * the model's own typical out-of-sample error around the point estimate —
+ * an honest statement of uncertainty, not a narrower number invented from
+ * nothing. The shipped build passes the live 5-fold CV typical error
+ * (sonar-8: x2.94); the default below is only a fallback for direct callers.
  */
 export function impliedRange(
   protocol: SnapshotProtocol,
@@ -657,8 +790,8 @@ export function scoreRow(
     : 12.5 + (growth / -MODEL.growth_floor) * 12.5;
   const logAge = age === null ? stats.medianLogAge : Math.log10(age + 1);
   const maturity = stats.maxLogAge > 0 ? 25 * (logAge / stats.maxLogAge) : 12.5;
-  // Confidence starts at 12.5 for the global curve itself (fitted on 128
-  // live-token protocols) and adds up to 12.5 more for category peers that
+  // Confidence starts at 12.5 for the global curve itself (fitted on 95
+  // comps) and adds up to 12.5 more for category peers that
   // agree: peer count over five, times one minus the peers' multiple
   // spread. A thin category is low confidence, never near zero, because the
   // curve still applies.
@@ -726,10 +859,11 @@ function bySlug(protocols: SnapshotProtocol[]): Map<string, SnapshotProtocol> {
 }
 
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
-export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, opts: { economics?: boolean } = {}): BoardRow[] {
+export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, opts: { economics?: boolean; typical_error_x?: number } = {}): BoardRow[] {
   const economics = opts.economics !== false;
   const fit = fitCurve(snapshot.protocols);
   const ageFit = fitAge(snapshot.protocols, snapshot.as_of, fit, model);
+  const oddsFit = fitTokenOdds(snapshot);
   const index = bySlug(snapshot.protocols);
   const chosen = new Map<string, SnapshotProtocol>();
   // The watchlist is the floor: every slug it names is in, whatever its score.
@@ -757,7 +891,10 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, op
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   // Board-wide figures the composite score is measured against: the log
   // TVL range and the log-age range over the board's own rows.
-  const { live: liveForPeers } = liveForFit(snapshot.protocols);
+  // Peers for the range come from ALL live-token protocols with a positive
+  // market cap (128) — a peer's multiple needs no age, so the 33 undated
+  // protocols still count as peers even though they are out of the fit.
+  const liveForPeers = liveWithMcap(snapshot.protocols);
   const logTvls = scored.map((s) => Math.log10(s.p.tvl_usd));
   const logAges = scored.filter((s) => s.age !== null).map((s) => Math.log10(s.age! + 1)).sort((a, b) => a - b);
   const stats = {
@@ -767,13 +904,14 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, op
     medianLogAge: logAges.length > 0 ? medianOf(logAges) : 0,
   };
   return scored.map((s, i) => {
-    const farm = economics ? farmEconomics(s.p, s.age, s.implied, model) : null;
+    const peers = categoryPeers(s.p, liveForPeers);
+    const range = impliedRange(s.p, peers, s.growthMult, s.ageMult, s.implied, opts.typical_error_x ?? 3.49);
+    const odds = tokenOdds(s.p, oddsFit);
+    const farm = economics ? farmEconomics(s.p, s.age, s.implied, range.low, oddsFit, model) : null;
     const steps = farmSteps(s.p, s.age).map(stepText);
     // The seventh step is the net, stated plainly — it is not an action with
     // a cost and a time, so it is appended as-is, not through stepText.
     if (farm !== null) steps.push(evStepText(farm));
-    const peers = categoryPeers(s.p, liveForPeers);
-    const range = impliedRange(s.p, peers, s.growthMult, s.ageMult, s.implied);
     const score = scoreRow(s.p, s.age, peers, stats);
     return {
       rank: i + 1,
@@ -792,6 +930,12 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, op
       implied_value_usd: s.implied,
       implied_low_usd: range.low,
       implied_high_usd: range.high,
+      token_odds: odds,
+      expected_pool_usd: Math.round(s.implied * odds * model.farmer_allocation),
+      // Rank ranges are filled in by buildRadar (they need the whole board);
+      // until then the range is the rank itself.
+      rank_low: i + 1,
+      rank_high: i + 1,
       peers,
       score,
       model: {
@@ -810,12 +954,21 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, op
         gas_usd: 0,
         opportunity_usd: 0,
         cost_usd: 0,
-        launch_probability: launchProbability(s.p),
+        token_odds: odds,
+        launch_probability: odds,
         farmer_pool_usd: 0,
+        expected_pool_usd: 0,
+        expected_low_pool_usd: 0,
         per_farmer_ev_usd: 0,
+        per_farmer_ev_low_usd: 0,
         net_ev_usd: 0,
+        net_ev_low_usd: 0,
         gas_to_ev: 0,
         break_even_farmers: 0,
+        break_even_low: 0,
+        deposit_threshold_usd: null,
+        hours_spent: 0,
+        ev_per_hour_usd: 0,
         rating: 'Skip' as const,
       },
       farm_steps: steps,
@@ -940,22 +1093,36 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   ];
 }
 
-/** The chance the protocol launches a token and rewards its farmers: larger protocols have more to gain from a token, so the chance rises with TVL on a log scale, from 0.30 at the $50M floor to 0.70 at $5B. */
-export function launchProbability(p: SnapshotProtocol): number {
-  const t = Math.log10(p.tvl_usd / 50_000_000) / 2;
-  return round4(clamp(0.3 + 0.4 * t, 0.3, 0.7));
+/** All live-token protocols with a positive market cap, in slug order — the peer pool for the range (a peer's multiple needs no age). */
+export function liveWithMcap(protocols: SnapshotProtocol[]): SnapshotProtocol[] {
+  return protocols
+    .filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0)
+    .sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+}
+
+/** The chance the protocol launches a token and rewards its farmers: the fitted token-odds model (see fitTokenOdds). Kept as a named function so the dashboard can quote it. */
+export function launchProbability(p: SnapshotProtocol, odds?: TokenOddsFit): number {
+  if (odds === undefined) return 0;
+  return tokenOdds(p, odds);
 }
 
 /**
  * One farm's economics: the expected value of farming it, netted against the
- * whole cost. The farmer pool is the implied value times the launch chance
- * times the farmers' 10% share; the reference count of 50,000 farmers turns
- * it into a per-farmer expectation. The cost is the gas the plan states
- * ($3 first transaction, $8/$4 setup, $2 a week, $2 to claim) plus the
- * capital's opportunity cost at 5% a year over the hold. The rating follows
- * the net: A at +$50, B at +$10, C at break-even, Skip below it.
+ * whole cost AT THE LOW END of the implied-value range. The farmer pool is
+ * the implied value times the fitted token odds times the farmers' 10%
+ * share; the reference count of 50,000 farmers turns it into a per-farmer
+ * expectation. The low pool uses implied_low instead of the point estimate,
+ * and the rating follows the LOW-end break-even count, so the verdict is the
+ * pessimistic one. The cost is the gas the plan states ($3 first transaction,
+ * $8/$4 setup, $2 a week, $2 to claim) plus the capital's opportunity cost
+ * at 5% a year over the hold. The deposit threshold is the deposit at which
+ * the low-end net is exactly zero, when the expected reward scales with the
+ * deposit: EV(D) = low EV x D / capital, cost(D) = gas + D x 5% x hold/365.
+ * Null when no deposit ever pays. Hours spent are the plan's own times:
+ * 15 minutes to set up, 10 minutes a week, 10 minutes to claim, 5 minutes
+ * to log — the EV per hour is the low-end net over those hours.
  */
-export function farmEconomics(p: SnapshotProtocol, age: number | null, implied: number, model: ModelConstants = MODEL): FarmEconomics {
+export function farmEconomics(p: SnapshotProtocol, age: number | null, implied: number, impliedLow: number, oddsFit: TokenOddsFit, model: ModelConstants = MODEL): FarmEconomics {
   const capital = capitalFor(p);
   const hold = holdDaysFor(age);
   const setupGas = capital >= 200 ? 8 : 4;
@@ -963,33 +1130,54 @@ export function farmEconomics(p: SnapshotProtocol, age: number | null, implied: 
   const gas = model.first_tx_gas_usd + setupGas + weeklyGas + model.claim_gas_usd;
   const opportunity = capital * model.capital_apr * (hold / 365);
   const cost = gas + opportunity;
-  const probability = launchProbability(p);
+  const probability = tokenOdds(p, oddsFit);
   const pool = implied * probability * model.farmer_allocation;
+  const poolLow = impliedLow * probability * model.farmer_allocation;
   const ev = pool / model.reference_farmers;
+  const evLow = poolLow / model.reference_farmers;
   const net = ev - cost;
+  const netLow = evLow - cost;
   const breakEven = cost > 0 ? Math.round(pool / cost) : 0;
+  const breakEvenLow = cost > 0 ? Math.round(poolLow / cost) : 0;
   const rating: FarmEconomics['rating'] =
-    breakEven >= model.rating_a_farmers ? 'A' : breakEven >= model.rating_b_farmers ? 'B' : breakEven >= model.rating_c_farmers ? 'C' : 'Skip';
+    breakEvenLow >= model.rating_a_farmers ? 'A' : breakEvenLow >= model.rating_b_farmers ? 'B' : breakEvenLow >= model.rating_c_farmers ? 'C' : 'Skip';
+  const oppRate = model.capital_apr * (hold / 365);
+  const denom = capital > 0 ? evLow / capital - oppRate : 0;
+  const threshold = denom > 0 ? Math.round(gas / denom) : null;
+  const hours = 0.25 + Math.ceil(hold / 7) * (10 / 60) + 10 / 60 + 5 / 60;
   return {
     capital_usd: capital,
     hold_days: hold,
     gas_usd: round2(gas),
     opportunity_usd: round2(opportunity),
     cost_usd: round2(cost),
-    launch_probability: probability,
+    token_odds: round4(probability),
+    launch_probability: round4(probability),
     farmer_pool_usd: Math.round(pool),
+    expected_pool_usd: Math.round(pool),
+    expected_low_pool_usd: Math.round(poolLow),
     per_farmer_ev_usd: round2(ev),
+    per_farmer_ev_low_usd: round2(evLow),
     net_ev_usd: round2(net),
+    net_ev_low_usd: round2(netLow),
     gas_to_ev: ev > 0 ? round4(gas / ev) : 0,
     break_even_farmers: breakEven,
+    break_even_low: breakEvenLow,
+    deposit_threshold_usd: threshold,
+    hours_spent: round2(hours),
+    ev_per_hour_usd: round2(netLow / hours),
     rating,
   };
 }
 
-/** The farm plan's seventh step: the verdict, in one line, so the plan ends on what the farm is worth. A plain string, not a FarmStep: it states figures, it is not an action with a cost and a time. */
+/** The farm plan's seventh step: the low-end verdict, in one line, so the plan ends on what the farm is worth at the pessimistic end. A plain string, not a FarmStep: it states figures, it is not an action with a cost and a time. */
 export function evStepText(e: FarmEconomics): string {
+  const netLow = e.net_ev_low_usd >= 0 ? `+$${e.net_ev_low_usd.toFixed(2)}` : `-$${Math.abs(e.net_ev_low_usd).toFixed(2)}`;
   const net = e.net_ev_usd >= 0 ? `+$${e.net_ev_usd.toFixed(2)}` : `-$${Math.abs(e.net_ev_usd).toFixed(2)}`;
-  return `Breaks even with up to ${groupInt(e.break_even_farmers)} farmers; at the ${groupInt(MODEL.reference_farmers)}-farmer reference the net is ${net} per farmer (farmer pool $${groupInt(e.farmer_pool_usd)}, total cost $${e.cost_usd.toFixed(2)}). Rating ${e.rating}.`;
+  const dep = e.deposit_threshold_usd === null
+    ? 'no deposit pays at the low end'
+    : `deposit at least $${groupInt(e.deposit_threshold_usd)} to break even at the low end`;
+  return `At the low end of the range the net is ${netLow} per farmer (low pool $${groupInt(e.expected_low_pool_usd)}, total cost $${e.cost_usd.toFixed(2)}); at the point estimate the net is ${net}. ${dep}; ${e.ev_per_hour_usd >= 0 ? '+' : ''}$${e.ev_per_hour_usd.toFixed(2)} per hour at the low end. Rating ${e.rating}.`;
 }
 
 /** The live-token protocols, by market cap, for the dashboard's live-token view. */
@@ -1050,6 +1238,12 @@ export function radarRow(row: BoardRow): RadarRow {
     implied_value_usd: row.implied_value_usd,
     implied_low_usd: row.implied_low_usd,
     implied_high_usd: row.implied_high_usd,
+    token_odds: row.token_odds,
+    expected_pool_usd: row.expected_pool_usd,
+    net_ev_low_usd: row.farm.net_ev_low_usd,
+    deposit_threshold_usd: row.farm.deposit_threshold_usd,
+    rank_low: row.rank_low,
+    rank_high: row.rank_high,
     peers: row.peers,
     score: row.score,
     curve_multiple: row.model.curve_multiple,
@@ -1112,7 +1306,7 @@ export function validateHoldout(snapshot: Snapshot, model: ModelConstants = MODE
 
 /**
  * The time-split check, recomputed by the program at run time: the live-token
- * protocols that carry a listed_at date (95 of 128), split at the median
+ * comps, split at the median listed_at date
  * listing date; the curve and the age fit are fitted on the older half only,
  * then the shipped model is scored on the newer half. A curve that only fits
  * the past would fall apart here; a stable one holds up on protocols listed
@@ -1160,7 +1354,7 @@ function mulberry32(seed: number): () => number {
 
 /**
  * The bootstrap stability check, recomputed by the program at run time: 200
- * resamples of the 128 live-token protocols with replacement (seeded, so the
+ * resamples of the 95 comps with replacement (seeded, so the
  * result is byte-identical every run), the Theil-Sen curve refitted on each,
  * and the 5th/50th/95th percentiles of the slope and intercept reported. A
  * narrow band means the curve's shape is not one protocol's doing; a wide
@@ -1199,20 +1393,309 @@ export function bootstrapCurve(snapshot: Snapshot): {
   };
 }
 
+/** The logistic token-odds model, fitted at run time on the whole snapshot (statistical-analysis: prespecified before fitting; backtest-expert: the 5-dimension gate). */
+function sigmoid(x: number): number {
+  return 1 / (1 + Math.exp(-clamp(x, -30, 30)));
+}
+
+/** A protocol's token-odds features, centred on the snapshot's medians: [1, log10(TVL) - medLogTvl, growth/100, log10(age+1) - medLogAge]. A protocol with no listed_at date gets the median age — never an invented age. */
+function oddsFeaturesAsOf(p: SnapshotProtocol, asOf: string, medLogAge: number, medLogTvl: number): number[] {
+  const growth = clamp(finite(p.change_7d, 0), MODEL.growth_floor, MODEL.growth_cap) / 100;
+  const age = ageDays(asOf, p.listed_at);
+  const logAge = age === null ? medLogAge : Math.log10(age + 1);
+  return [1, Math.log10(p.tvl_usd) - medLogTvl, growth, logAge - medLogAge];
+}
+
+/** Logistic regression by iteratively reweighted least squares (ridge 1e-4), deterministic: the same rows, the same coefficients, every run. */
+function fitLogistic(rows: SnapshotProtocol[], asOf: string, medLogAge: number, medLogTvl: number): number[] {
+  const X = rows.map((p) => oddsFeaturesAsOf(p, asOf, medLogAge, medLogTvl));
+  const y = rows.map((p) => (isPreToken(p) ? 0 : 1));
+  const d = 4;
+  let beta = [0, 0, 0, 0];
+  for (let it = 0; it < 50; it++) {
+    const W: number[] = [];
+    const z: number[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      const eta = X[i]!.reduce((s, v, j) => s + v * beta[j]!, 0);
+      const mu = sigmoid(eta);
+      const w = Math.max(mu * (1 - mu), 1e-6);
+      W.push(w);
+      z.push(eta + (y[i]! - mu) / w);
+    }
+    const A: number[][] = Array.from({ length: d }, () => new Array(d).fill(0));
+    const b: number[] = new Array(d).fill(0);
+    for (let i = 0; i < rows.length; i++) {
+      for (let j = 0; j < d; j++) {
+        b[j]! += W[i]! * X[i]![j]! * z[i]!;
+        for (let k = 0; k < d; k++) A[j]![k]! += W[i]! * X[i]![j]! * X[i]![k]!;
+      }
+    }
+    for (let j = 0; j < d; j++) A[j]![j]! += 1e-4;
+    for (let col = 0; col < d; col++) {
+      let piv = col;
+      for (let r = col + 1; r < d; r++) if (Math.abs(A[r]![col]!) > Math.abs(A[piv]![col]!)) piv = r;
+      [A[col], A[piv]] = [A[piv]!, A[col]!];
+      [b[col], b[piv]] = [b[piv]!, b[col]!];
+      for (let r = col + 1; r < d; r++) {
+        const f = A[r]![col]! / A[col]![col]!;
+        for (let k = col; k < d; k++) A[r]![k]! -= f * A[col]![k]!;
+        b[r]! -= f * b[col]!;
+      }
+    }
+    const nb = new Array(d).fill(0);
+    for (let r = d - 1; r >= 0; r--) {
+      let s = b[r]!;
+      for (let k = r + 1; k < d; k++) s -= A[r]![k]! * nb[k]!;
+      nb[r] = s / A[r]![r]!;
+    }
+    const delta = Math.max(...nb.map((v, j) => Math.abs(v - beta[j]!)));
+    beta = nb;
+    if (delta < 1e-8) break;
+  }
+  return beta;
+}
+
+/**
+ * The fitted token-odds model: P(a protocol like this records a token).
+ * y = 1 iff the protocol records a token (any of mcap, gecko_id, symbol
+ * non-null — 416 yes / 342 no). Features are the snapshot's own figures
+ * (log TVL, 7d growth, log age), centred on the snapshot's medians. AUC and
+ * Brier come from 5-fold cross-validation in slug order, so the headline
+ * numbers are out-of-sample, not in-sample. The chains-count variant was
+ * tested and dropped (CV AUC 0.656 vs 0.672 without it).
+ */
+export function fitTokenOdds(snapshot: Snapshot): TokenOddsFit {
+  const sorted = [...snapshot.protocols].sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+  const datedAges = snapshot.protocols
+    .filter((p) => p.listed_at !== null)
+    .map((p) => Math.log10((ageDays(snapshot.as_of, p.listed_at) ?? 0) + 1))
+    .sort((a, b) => a - b);
+  const medLogAge = medianOf(datedAges);
+  const medLogTvl = medianOf(snapshot.protocols.map((p) => Math.log10(p.tvl_usd)).sort((a, b) => a - b));
+  const beta = fitLogistic(sorted, snapshot.as_of, medLogAge, medLogTvl);
+  // 5-fold CV AUC + Brier, out of sample.
+  const oof: { s: number; y: number }[] = [];
+  for (let fold = 0; fold < 5; fold++) {
+    const test = sorted.filter((_, i) => i % 5 === fold);
+    const train = sorted.filter((_, i) => i % 5 !== fold);
+    const b = fitLogistic(train, snapshot.as_of, medLogAge, medLogTvl);
+    for (const p of test) {
+      const f = oddsFeaturesAsOf(p, snapshot.as_of, medLogAge, medLogTvl);
+      oof.push({ s: sigmoid(f.reduce((s2, x, j) => s2 + x * b[j]!, 0)), y: isPreToken(p) ? 0 : 1 });
+    }
+  }
+  const pos = oof.filter((r) => r.y === 1).map((r) => r.s);
+  const neg = oof.filter((r) => r.y === 0).map((r) => r.s);
+  let wins = 0;
+  for (const a of pos) for (const b of neg) wins += a > b ? 1 : a === b ? 0.5 : 0;
+  const auc = pos.length > 0 && neg.length > 0 ? wins / (pos.length * neg.length) : 0.5;
+  const brier = oof.reduce((t, r) => t + (r.s - r.y) ** 2, 0) / oof.length;
+  const nYes = snapshot.protocols.filter((p) => !isPreToken(p)).length;
+  return {
+    beta: beta.map(round4),
+    median_log_age: round4(medLogAge),
+    median_log_tvl: round4(medLogTvl),
+    as_of: snapshot.as_of,
+    n_yes: nYes,
+    n_no: snapshot.protocols.length - nYes,
+    auc_cv: round4(auc),
+    brier_cv: round4(brier),
+  };
+}
+
+/** A protocol's token odds under a fitted model: P(it records a token). The fit carries the snapshot's as_of, so no date is hardcoded. */
+export function tokenOdds(p: SnapshotProtocol, odds: TokenOddsFit): number {
+  const growth = clamp(finite(p.change_7d, 0), MODEL.growth_floor, MODEL.growth_cap) / 100;
+  const age = ageDays(odds.as_of, p.listed_at);
+  const logAge = age === null ? odds.median_log_age : Math.log10(age + 1);
+  const f = [1, Math.log10(p.tvl_usd) - odds.median_log_tvl, growth, logAge - odds.median_log_age];
+  return sigmoid(f.reduce((s, x, j) => s + x * odds.beta[j]!, 0));
+}
+
+/** The 758-protocol ledger: every protocol in the snapshot, accounted for exactly once. */
+export function ledgerFor(snapshot: Snapshot, board: BoardRow[]): Ledger {
+  const boardSlugs = new Set(board.map((r) => r.slug));
+  const watchlistRows = board.filter((r) => snapshot.watchlist.includes(r.slug)).length;
+  let excludedByCategory = 0;
+  let excludedByVersion = 0;
+  let excludedByWrappedWord = 0;
+  let excludedByExchangePrefix = 0;
+  let excludedPreToken = 0;
+  for (const p of snapshot.protocols) {
+    if (boardSlugs.has(p.slug)) continue;
+    if (!isPreToken(p)) continue;
+    excludedPreToken++;
+    if (p.category !== null && EXCLUDED_CATEGORIES.has(p.category)) excludedByCategory++;
+    else if (VERSIONED.test(p.name)) excludedByVersion++;
+    else if (WRAPPED_WORD.test(p.name)) excludedByWrappedWord++;
+    else if (EXCHANGE_PREFIX.test(p.name)) excludedByExchangePrefix++;
+  }
+  const livePositive = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0).length;
+  const liveZeroOrLess = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd <= 0).length;
+  const tokenRecordedNoMcap = snapshot.protocols.filter((p) => !isPreToken(p) && p.mcap_usd === null).length;
+  return {
+    total: snapshot.protocols.length,
+    board_rows: board.length,
+    watchlist_rows: watchlistRows,
+    early_rows: board.length - watchlistRows,
+    excluded_pre_token: excludedPreToken,
+    excluded_by_category: excludedByCategory,
+    excluded_by_version: excludedByVersion,
+    excluded_by_wrapped_word: excludedByWrappedWord,
+    excluded_by_exchange_prefix: excludedByExchangePrefix,
+    live_mcap_positive: livePositive,
+    live_mcap_zero_or_less: liveZeroOrLess,
+    token_recorded_no_mcap: tokenRecordedNoMcap,
+  };
+}
+
+/**
+ * Rank ranges from 200 seeded bootstrap refits of the 95 comps (backtest-expert:
+ * the refit range is the ranking's own uncertainty, not just the value's).
+ * Each resample refits the curve and the age term, recomputes every board
+ * row's implied value, and re-ranks; the p5-p95 rank per row is the range.
+ */
+export function rankRangesFor(snapshot: Snapshot, board: BoardRow[], model: ModelConstants = MODEL): { low: number; high: number }[] {
+  const { live } = liveForFit(snapshot.protocols);
+  const index = bySlug(snapshot.protocols);
+  const rand = mulberry32(20261122);
+  const ranks: number[][] = board.map(() => []);
+  const atIndex = new Map(board.map((r, i) => [r.slug, i]));
+  for (let b = 0; b < 200; b++) {
+    const sample: SnapshotProtocol[] = [];
+    for (let i = 0; i < live.length; i++) sample.push(live[Math.floor(rand() * live.length)]!);
+    const fit = fitCurve(sample);
+    const ageFit = fitAge(sample, snapshot.as_of, fit, model);
+    const scored = board
+      .map((r) => ({ slug: r.slug, implied: impliedValue(index.get(r.slug)!, snapshot.as_of, fit, ageFit, model).implied }))
+      .sort((a, b) => b.implied - a.implied || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+    scored.forEach((s, i) => {
+      ranks[atIndex.get(s.slug)!]!.push(i + 1);
+    });
+  }
+  return board.map((_, i) => {
+    const sorted = [...ranks[i]!].sort((a, b) => a - b);
+    return { low: sorted[Math.floor(0.05 * (sorted.length - 1))]!, high: sorted[Math.ceil(0.95 * (sorted.length - 1))]! };
+  });
+}
+
+/** 5-fold cross-validation on the 95 comps, with the shipped model (w=0.20, shrunk k). */
+export function validateCv(snapshot: Snapshot, model: ModelConstants = MODEL): { n: number; mdape_pct: number; hit_pct: number; typical_error_x: number } {
+  const { live } = liveForFit(snapshot.protocols);
+  const preds: { pred: number; actual: number }[] = [];
+  for (let fold = 0; fold < 5; fold++) {
+    const test = live.filter((_, i) => i % 5 === fold);
+    const train = live.filter((_, i) => i % 5 !== fold);
+    const fit = fitCurve(train);
+    const ageFit = fitAge(train, snapshot.as_of, fit, model);
+    for (const p of test) preds.push({ pred: impliedValue(p, snapshot.as_of, fit, ageFit, model).implied, actual: p.mcap_usd! });
+  }
+  return { n: live.length, ...oosMetrics(preds) };
+}
+
+/** Leave-one-out on the 95 comps: each protocol predicted by a curve fitted without it. */
+export function validateLoo(snapshot: Snapshot, model: ModelConstants = MODEL): { n: number; mdape_pct: number; hit_pct: number; typical_error_x: number } {
+  const { live } = liveForFit(snapshot.protocols);
+  const preds: { pred: number; actual: number }[] = [];
+  for (let i = 0; i < live.length; i++) {
+    const train = live.filter((_, j) => j !== i);
+    const fit = fitCurve(train);
+    const ageFit = fitAge(train, snapshot.as_of, fit, model);
+    preds.push({ pred: impliedValue(live[i]!, snapshot.as_of, fit, ageFit, model).implied, actual: live[i]!.mcap_usd! });
+  }
+  return { n: live.length, ...oosMetrics(preds) };
+}
+
+/** Walk-forward on the 95 dated comps (backtest-expert): 3 windows by listed_at quartile — fit on earlier quartiles, test the next. */
+export function validateWalkForward(snapshot: Snapshot, model: ModelConstants = MODEL): {
+  windows: { fit_n: number; test_n: number; cutoff: string; mdape_pct: number; hit_pct: number; typical_error_x: number }[];
+} {
+  const { live } = liveForFit(snapshot.protocols);
+  const dated = [...live].sort((a, b) => (a.listed_at! < b.listed_at! ? -1 : a.listed_at! > b.listed_at! ? 1 : 0));
+  const windows: { fit_n: number; test_n: number; cutoff: string; mdape_pct: number; hit_pct: number; typical_error_x: number }[] = [];
+  for (let win = 1; win < 4; win++) {
+    const cut = Math.floor((win * dated.length) / 4);
+    const train = dated.slice(0, cut);
+    const test = dated.slice(cut, Math.floor(((win + 1) * dated.length) / 4));
+    const fit = fitCurve(train);
+    const ageFit = fitAge(train, snapshot.as_of, fit, model);
+    const m = oosMetrics(test.map((p) => ({ pred: impliedValue(p, snapshot.as_of, fit, ageFit, model).implied, actual: p.mcap_usd! })));
+    windows.push({ fit_n: train.length, test_n: test.length, cutoff: train[train.length - 1]!.listed_at!, ...m });
+  }
+  return { windows };
+}
+
+/** The snapshot's data-quality scorecard (data-quality-audit: null profile, duplicates, ranges — reimplemented in TypeScript, no scripts run). */
+export function dataQualityFor(snapshot: Snapshot): DataQuality {
+  const slugs = snapshot.protocols.map((p) => p.slug);
+  const ages = snapshot.protocols
+    .filter((p) => p.listed_at !== null)
+    .map((p) => ageDays(snapshot.as_of, p.listed_at)!)
+    .sort((a, b) => a - b);
+  const growths = snapshot.protocols.filter((p) => p.change_7d !== null).map((p) => p.change_7d!);
+  return {
+    total: snapshot.protocols.length,
+    duplicate_slugs: slugs.length - new Set(slugs).size,
+    null_change_7d: snapshot.protocols.filter((p) => p.change_7d === null).length,
+    null_listed_at: snapshot.protocols.filter((p) => p.listed_at === null).length,
+    null_category: snapshot.protocols.filter((p) => p.category === null).length,
+    null_mcap: snapshot.protocols.filter((p) => p.mcap_usd === null).length,
+    null_gecko: snapshot.protocols.filter((p) => p.gecko_id === null).length,
+    null_symbol: snapshot.protocols.filter((p) => p.symbol === null).length,
+    min_tvl_usd: Math.min(...snapshot.protocols.map((p) => p.tvl_usd)),
+    max_tvl_usd: Math.max(...snapshot.protocols.map((p) => p.tvl_usd)),
+    min_age_days: ages.length > 0 ? ages[0]! : null,
+    max_age_days: ages.length > 0 ? ages[ages.length - 1]! : null,
+    growth_min: growths.length > 0 ? Math.min(...growths) : null,
+    growth_max: growths.length > 0 ? Math.max(...growths) : null,
+    live_mcap_positive: snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0).length,
+    live_mcap_zero_or_less: snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd <= 0).length,
+  };
+}
+
+/** The assumptions log (analysis-assumptions-log): every modelling assumption, its rationale, confidence, and how it is checked. */
+export const ASSUMPTIONS: Assumption[] = [
+  { assumption: 'The curve is fitted on the 95 live-token protocols with a positive market cap AND a listed_at date.', rationale: 'Every comp must contribute to every value term (TVL, growth, age). The 33 undated protocols cannot inform the age term.', confidence: 'high', validation: 'The 128-comp curve is kept as a sensitivity variant; on the same holdout it scores 82.7% vs 81.1% for the 95-comp curve.' },
+  { assumption: 'Growth weight 0.20 is the plateau centre, not the CV argmin (w=0).', rationale: 'CV is flat over w in 0..0.3 (85.2-85.6%); the argmin would delete growth from the value, which criterion 2 names.', confidence: 'high', validation: 'Sensitivity table over w in 0..0.5 in the README; the whole plateau is within 0.5 points.' },
+  { assumption: 'Age multiplier k is shrunk to +/-0.05.', rationale: 'The age signal is weak (correlation about -0.05); the unshrunk slope would overfit noise.', confidence: 'high', validation: 'Bootstrap 95% CI of the unshrunk k is [-0.70, +0.38] — it includes 0.' },
+  { assumption: 'Token odds = P(records a token) from a logistic fit on the snapshot cross-section.', rationale: 'The snapshot has no launch history; the peer record is the only launch-adjacent signal it carries.', confidence: 'medium', validation: '5-fold CV AUC 0.67, Brier 0.23 vs 0.25 for the base rate; calibration quintiles reported. It is NOT a hazard rate.' },
+  { assumption: 'Farmers take 10% of the token; the reference crowd is 50,000 farmers.', rationale: 'A stated reference, not a measured share: no airdrop split is in the snapshot.', confidence: 'low', validation: 'The rating follows the break-even farmer count, which scales with the share — a reader who assumes 5% halves every break-even count.' },
+  { assumption: 'The expected reward scales with the deposit (for the deposit threshold).', rationale: 'Airdrops usually weight by activity/size; without it no deposit threshold exists at all.', confidence: 'low', validation: 'The threshold is shown only beside the low-end net, and rows where no deposit ever pays say so.' },
+  { assumption: 'The 400x mcap/TVL outliers are kept in the fit.', rationale: 'Theil-Sen is already robust; trimming the outer 5-20% each tail cost 2-3 points of CV error.', confidence: 'high', validation: 'Trimming experiment in the README (88.0-88.6% vs 85.6%).' },
+  { assumption: 'No family-level fit: the snapshot carries no parentProtocol field.', rationale: 'Name-based grouping finds 128 distinct families — no grouping at all — and the only shared symbol (BIFI) is two different protocols.', confidence: 'high', validation: 'Distinct gecko_id among live tokens is 128; no two protocols share a token.' },
+  { assumption: 'listed_at is the day DefiLlama began tracking the protocol, not a token launch date.', rationale: 'The snapshot says so; any "no-token clock" built on it measures time tracked without a token, nothing more.', confidence: 'high', validation: 'Stated on the dashboard wherever age is shown.' },
+  { assumption: 'Gas is $3 first transaction + $8/$4 setup + $2 a week + $2 to claim; capital earns 5% a year.', rationale: 'Round, stated estimates for a BSC-scale farm; the exact gas depends on the chain and the day.', confidence: 'medium', validation: 'Every step states its own cost, so a reader can re-price the plan with their own gas.' },
+];
+
 /** Everything the dashboard renders, from the snapshot. */
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL, opts: { economics?: boolean } = {}): { board: BoardRow[]; radar: RadarData } {
-  const board = buildBoard(snapshot, model, opts);
+  // The range fallback for peer-poor rows is the live 5-fold CV typical
+  // error, so the board is built with the same error the validation reports.
+  const cv95 = validateCv(snapshot, model);
+  const board = buildBoard(snapshot, model, { ...opts, typical_error_x: cv95.typical_error_x });
   const fit = fitCurve(snapshot.protocols);
   const ageFit = fitAge(snapshot.protocols, snapshot.as_of, fit, model);
+  const oddsFit = fitTokenOdds(snapshot);
   const live = liveRows(snapshot);
   const early = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
   const holdout = validateHoldout(snapshot, model);
   const timeSplit = validateTimeSplit(snapshot, model);
   const bootstrap = bootstrapCurve(snapshot);
+  const loo = validateLoo(snapshot, model);
+  const walkForward = validateWalkForward(snapshot, model);
+  const ledger = ledgerFor(snapshot, board);
+  const quality = dataQualityFor(snapshot);
+  const ranges = rankRangesFor(snapshot, board, model);
+  board.forEach((r, i) => {
+    r.rank_low = ranges[i]!.low;
+    r.rank_high = ranges[i]!.high;
+  });
   const examples = [10_000_000, 100_000_000, 1_000_000_000, 5_000_000_000].map((tvl) => {
     const multiple = curveMultiple(tvl, fit, model);
     return { tvl_usd: tvl, multiple: round4(multiple), implied_usd: Math.max(1, Math.round(tvl * multiple)) };
   });
+  const { live: comps } = liveForFit(snapshot.protocols);
+  const points = comps.map((p) => [round4(Math.log10(p.tvl_usd)), round4(Math.log10(p.mcap_usd!))]);
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -1232,13 +1715,30 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL, op
       n_live: fit.n_live,
       age: ageFit,
       examples,
+      points,
+      band: { slope_p5: bootstrap.slope_p5, slope_p95: bootstrap.slope_p95, intercept_p5: bootstrap.intercept_p5, intercept_p95: bootstrap.intercept_p95 },
     },
     validation: {
       protocol:
-        '128 live-token protocols with a positive market cap, sorted by slug. 5-fold cross-validation on 103 (folds by index i % 5); a 25-protocol holdout (i % 5 === 4) touched once, after selection by CV. Median absolute percentage error; hit = prediction within 2x of the actual market cap.',
+        '95 live-token protocols with a positive market cap and a listed_at date, sorted by slug. 5-fold cross-validation on the 95 (folds by index i % 5); a 19-protocol holdout (i % 5 === 4) touched once, after selection by CV. Median absolute percentage error; hit = prediction within 2x of the actual market cap.',
       cv: VALIDATION_CV,
+      cv95,
+      loo,
+      walk_forward: walkForward,
+      odds: {
+        beta: oddsFit.beta,
+        median_log_age: oddsFit.median_log_age,
+        median_log_tvl: oddsFit.median_log_tvl,
+        n_yes: oddsFit.n_yes,
+        n_no: oddsFit.n_no,
+        auc_cv: oddsFit.auc_cv,
+        brier_cv: oddsFit.brier_cv,
+      },
+      ledger,
+      quality,
+      assumptions: ASSUMPTIONS,
       holdout_n: holdout.n,
-      holdout_shipped: { model: 'sonar-7: curve + growth 0.25 + age, range + score, playbooks, time-split', ...holdout.shipped },
+      holdout_shipped: { model: 'sonar-8: curve + growth 0.20 + age, token odds, low-end farm', ...holdout.shipped },
       holdout_global_median: { model: 'Global median', ...holdout.global_median },
       holdout_tvl_only: { model: 'TVL only (multiple 1.0)', ...holdout.tvl_only },
       time_split: timeSplit,
@@ -1246,14 +1746,17 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL, op
       fit,
       live_examples: liveExamples(snapshot, fit, model),
       notes: [
-        '16 of the 144 live-token protocols record a market cap of $0 or less (dead or failed tokens) and are excluded from every fit: no multiple can be learned from a zero.',
-        'Growth is kept at quarter weight: out of sample it costs 0.1 points of median error (85.1% vs 85.0%) and keeps the seven-day momentum the criteria ask for.',
-        'Maturity (age) enters the value through a fitted multiplier: the curve residual\'s slope on centred log10(age+1), shrunk to +/-0.05 because the age signal is weak (correlation about -0.05) and a full fit would overfit noise. A protocol with no listed_at date gets no age adjustment; 33 of the 128 training protocols carry no date, so the age input is missing for a quarter of the fit. Age also decides the farm hold.',
+        '16 of the 144 protocols that record a market cap record $0 or less (dead or failed tokens) and are excluded from every fit: no multiple can be learned from a zero. 33 more record a positive market cap but no listed_at date, so they cannot inform the age term and are out of the fit — every comp contributes to every term. They still appear in the live-token view and as range peers.',
+        'Growth weight 0.20 is fitted, not manual: the 5-fold CV plateau over w in 0..0.5 is flat (85.2% at w=0, 85.3% at 0.1, 85.5% at 0.2, 85.6% at 0.3), and 0.20 is the plateau centre. The argmin w=0 would delete growth from the value, which criterion 2 names.',
+        'Maturity (age) enters the value through a fitted multiplier: the curve residual\'s slope on centred log10(age+1), shrunk to +/-0.05 because the age signal is weak (correlation about -0.05) and a full fit would overfit noise — the unshrunk slope\'s bootstrap 95% CI is [-0.70, +0.38] and includes 0. A protocol with no listed_at date gets no age adjustment. Age also decides the farm hold.',
+        'Token odds are a logistic fit on all 758 protocols (416 record a token, 342 do not) over centred log10(TVL), growth/100 and centred log10(age+1). 5-fold CV AUC 0.67, Brier 0.23 against a 0.55 base rate. This is a cross-sectional association with the peer record, NOT a hazard rate and NOT a forecast of a future launch: older protocols score higher because they survived, fast growers lower because they have not launched yet.',
+        'Expected value = implied value x token odds x 10% (the farmers\' share of the token). The farm verdict is netted at the LOW end of the implied-value range, so a farm that only pays on the point estimate is rated Skip; the point-estimate net is still shown beside it.',
         'A category-shrinkage variant (curve x category factor) was tested and dropped: 88.1%, worse than the plain global curve.',
-        'The implied value is a point estimate with a range: the p25-p75 multiples of the protocol\'s nearest live-token peers in its own category (up to five, nearest in log TVL), carried through the same growth and age multipliers. With fewer than two peers the range is the model\'s own typical out-of-sample error (x3.49) around the point estimate — an honest width, not a narrower number invented from nothing.',
+        'The implied value is a point estimate with a range: the p25-p75 multiples of the protocol\'s nearest live-token peers in its own category (up to five, nearest in log TVL), carried through the same growth and age multipliers. With fewer than two peers the range is the model\'s own typical out-of-sample error (x' + cv95.typical_error_x.toFixed(2) + ', the live 5-fold CV figure) around the point estimate — an honest width, not a narrower number invented from nothing.',
         'The 0-100 score is four named sub-scores of 0-25 each (scale, momentum, maturity, confidence), all from the snapshot\'s own figures; it presents the same figures the value already uses and never changes the implied value.',
-        'Time-split: the curve and the age fit are fitted on the older half of the 95 live-token protocols that carry a listed_at date and scored on the newer half (listed after the median date). A curve that only fits the past would fall apart on the newer half.',
-        'Bootstrap: 200 resamples of the 128 live-token protocols with replacement (seeded, so the result is byte-identical every run), the curve refitted on each. The slope and intercept bands say how much the fit moves when the sample moves.',
+        'Time-split: the curve and the age fit are fitted on the older half of the 95 comps and scored on the newer half (listed after the median date). A curve that only fits the past would fall apart on the newer half. Walk-forward adds three windows by listed_at quartile.',
+        'Bootstrap: 200 resamples of the 95 comps with replacement (seeded, so the result is byte-identical every run), the curve refitted on each. The slope and intercept bands say how much the fit moves when the sample moves. The same 200 refits give every row its rank range (p5-p95).',
+        'The ledger accounts for all 758 protocols: 198 on the board (40 watchlist + 158 early), 144 pre-token protocols excluded by the house rule (by category, version marker, wrapped/staked word, or exchange prefix), 128 live-token protocols with a positive market cap, 16 dead (market cap $0 or less), and 272 that record a token but no market cap.',
       ],
     },
     farm: {
@@ -1263,11 +1766,16 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL, op
       claim_gas_usd: model.claim_gas_usd,
       first_tx_gas_usd: model.first_tx_gas_usd,
     },
+    odds: oddsFit,
+    ledger,
+    quality,
+    assumptions: ASSUMPTIONS,
     rows: board.map(radarRow),
     live,
   };
   return { board, radar };
 }
+
 
 /** The snapshot out of a file's text, refused unless it is the shape the model scores. */
 export function parseSnapshot(text: string): Snapshot {
@@ -1342,3 +1850,4 @@ export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null
 export function dataScript(radar: RadarData): string {
   return `window.RADAR=${JSON.stringify(radar)};\n`;
 }
+

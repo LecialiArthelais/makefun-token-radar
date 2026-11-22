@@ -85,22 +85,15 @@ for (const name of shots) {
   }
 }
 
-// The validation record goes into dashboard/ so the dossier's text carries
-// it whole: the curve, the out-of-sample table, the holdout the program
-// recomputed, and the live protocols the curve was checked against. It is
-// written before the dossier, so buildDossier includes it.
-const validation = {
-  model_version: radar.model_version,
-  curve: radar.curve,
-  farm: radar.farm,
-  validation: radar.validation,
-};
-writeFileSync(join(out, 'dashboard', 'validation.json'), `${JSON.stringify(validation, null, 2)}\n`);
+// The validation record lives in data.js beside the page (the dashboard's
+// model section renders it from there), so it is not duplicated into
+// dashboard/: the dossier's text cap is 65,536 bytes and every byte of
+// dashboard source counts against what the judge can read whole.
 
 // The dossier is written last: the scorer rebuilds it from this /output and compares bytes.
 writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEXT_MAX_BYTES, screenshots: SCREENSHOT_CAPS, dashboard: { max_files: 400, max_bytes: 4_194_304 } }));
 
 process.stdout.write(
   `sonar: ${snapshot.protocols.length} protocols, ${snapshot.watchlist.length} on the watchlist, ${board.length} rows scored (${radar.early_size} early, ${radar.live_size} live set aside)\n` +
-    `sonar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (${dashFiles.length + 1} files, validation.json included), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
+    `sonar: wrote ${join(out, 'board.json')}, ${join(out, 'data.js')}, ${join(out, 'dashboard')} (${dashFiles.length} files), ${join(out, 'screenshots')} (${shots.length} images) and ${join(out, 'dossier.json')}\n`,
 );
