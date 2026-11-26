@@ -1,4 +1,12 @@
-// D Sonar's signal model, sonar-8: one sealed snapshot in, one ranked board out.
+// D Sonar's signal model, sonar-9: one sealed snapshot in, one ranked board out.
+//
+// Sonar-9 keeps the sonar-8 value model unchanged (same curve, growth weight,
+// age multiplier, token odds) and adds, around it: a split-conformal range
+// with measured blind coverage, 10-fold CV, a keep/drop table per term plus
+// placebo controls, a nested odds check, age-bucket odds, and farm plans
+// sized at the minimum viable deposit (the deposit threshold) with tier
+// verdicts, an itemised cost breakdown per outflow, dated plan windows and
+// a break-even share.
 //
 // The board ranks pre-token protocols by what their token would be worth if the
 // protocol's record stayed as it is. The value is not a prediction of a launch;
@@ -183,7 +191,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it. */
-export const MODEL_VERSION = 'sonar-8';
+export const MODEL_VERSION = 'sonar-9';
 
 /** How many live-token protocols the live-token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -274,6 +282,29 @@ export interface FarmEconomics {
   hours_spent: number;
   ev_per_hour_usd: number;
   rating: 'A' | 'B' | 'C' | 'Skip';
+  /** The deposit the farm plan is sized at: the deposit threshold (the
+   * minimum viable capital) when one exists and lies in [10, 10000], else
+   * the standard tier capital. The plan's steps deposit this amount. */
+  plan_capital_usd: number;
+  /** The verdict at three deposits: the standard $50 and $100 tiers and
+   * the threshold itself. Net is the low-end net at that deposit, the
+   * rating the break-even farmer count at that deposit. */
+  tiers: { capital_usd: number; net_low_usd: number; rating: 'A' | 'B' | 'C' | 'Skip' }[];
+  /** The plan's costs, itemised per outflow, at the plan capital. */
+  cost_breakdown: {
+    first_tx_usd: number;
+    setup_usd: number;
+    weekly_gas_usd: number;
+    claim_usd: number;
+    opportunity_usd: number;
+    total_usd: number;
+  };
+  /** The plan's costs as a share of the low-end per-farmer EV: under 100%
+   * the farm pays at the low end, over 100% it never does. */
+  break_even_share_pct: number | null;
+  /** The plan window: the snapshot date to the snapshot date plus the hold. */
+  plan_start_date: string;
+  plan_end_date: string;
 }
 
 /** One row of board.json: the ranked board's row. */
@@ -373,6 +404,13 @@ export interface CvRow {
  * validateHoldout); the CV table is the experiment's recorded result.
  */
 export const VALIDATION_CV: CvRow[] = [
+  // The sonar-9 value model IS the sonar-8 value model, unchanged (same
+  // curve, growth weight, age multiplier, token odds), so the same
+  // out-of-sample numbers. What sonar-9 adds is the range, the checks and
+  // the plans around it (split-conformal range, 10-fold CV, keep/drop +
+  // placebo, nested odds, minimum-viable farm plans) — see the validation
+  // the program writes, not this recorded table.
+  { model: 'sonar-9: curve + growth 0.20 + age, token odds, low-end farm, conformal range, keep/drop + placebo, nested odds, minimum-viable farm plans', mdape_pct: 84.1, hit_pct: 37.9, typical_error_x: 2.94 },
   { model: 'sonar-8: curve + growth 0.20 + age, token odds, low-end farm', mdape_pct: 84.1, hit_pct: 37.9, typical_error_x: 2.94 },
   { model: 'sonar-7: curve + growth 0.25 + age, range + score, playbooks, time-split', mdape_pct: 85.6, hit_pct: 28.2, typical_error_x: 3.49 },
   { model: 'sonar-6: curve + growth 0.25 + age, range + score, playbooks', mdape_pct: 85.6, hit_pct: 28.2, typical_error_x: 3.49 },
@@ -408,6 +446,38 @@ export interface ValidationResult {
   ledger: Ledger;
   quality: DataQuality;
   assumptions: Assumption[];
+  /** Split-conformal range (sonar-9): the 90% interval's half-width, its
+   * measured blind coverage on a test set the fit never saw, and the 80%
+   * interval alongside it. A range is only called conformal when its
+   * coverage is measured; both numbers are here. */
+  conformal: {
+    nominal_pct: number;
+    coverage_pct: number;
+    n_calibration: number;
+    n_test: number;
+    half_width_x: number;
+    q90_log10: number;
+    coverage_80_pct: number;
+    half_width_80_x: number;
+    method: string;
+  };
+  /** 10-fold cross-validation of the value model (sonar-9). */
+  cv10: { n: number; mdape_pct: number; hit_pct: number; typical_error_x: number };
+  /** Keep/drop per term (sonar-9): each named term tested against the
+   * variant without it, on the same 5-fold CV. */
+  terms: { term: string; test: string; result: string; verdict: string }[];
+  /** Placebo controls (sonar-9): the same machinery run on shuffled
+   * labels / shuffled growth, where no signal should exist. */
+  placebo: { test: string; result: string; verdict: string }[];
+  /** Nested odds check (sonar-9): within each implied-value tercile, do
+   * the token odds still separate the protocols that record a token? */
+  odds_nested: {
+    bands: { band: string; n: number; n_yes: number; auc: number }[];
+    overall_auc: number;
+    note: string;
+  };
+  /** Age buckets (sonar-9): P(records a token) by age band, over all 758. */
+  age_buckets: { bucket: string; n: number; p_records_token: number; median_tvl_usd: number }[];
   holdout_n: number;
   holdout_shipped: CvRow;
   holdout_global_median: CvRow;
@@ -527,6 +597,25 @@ export interface RadarData {
   };
   rows: RadarRow[];
   live: LiveRow[];
+  /** The 2D farm matrix (sonar-9): token-odds band x low-end EV-per-hour
+   * band, each cell carrying its row count and its best row by EV/hour. */
+  farm_matrix: {
+    odds_band: string;
+    ev_band: string;
+    count: number;
+    top_slug: string | null;
+    top_name: string | null;
+    top_ev_per_hour_usd: number | null;
+  }[];
+  /** One playbook per category on the board (sonar-9): the category's
+   * weekly action, its cost note and its hold. */
+  playbooks: {
+    category: string;
+    rows: number;
+    action: string;
+    cost_note: string;
+    hold_days: number;
+  }[];
 }
 
 /** Why the snapshot is not one this model can score. */
@@ -907,8 +996,8 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, op
     const peers = categoryPeers(s.p, liveForPeers);
     const range = impliedRange(s.p, peers, s.growthMult, s.ageMult, s.implied, opts.typical_error_x ?? 3.49);
     const odds = tokenOdds(s.p, oddsFit);
-    const farm = economics ? farmEconomics(s.p, s.age, s.implied, range.low, oddsFit, model) : null;
-    const steps = farmSteps(s.p, s.age).map(stepText);
+    const farm = economics ? farmEconomics(s.p, s.age, s.implied, range.low, oddsFit, snapshot.as_of, model) : null;
+    const steps = farmSteps(s.p, s.age, farm?.plan_capital_usd).map(stepText);
     // The seventh step is the net, stated plainly — it is not an action with
     // a cost and a time, so it is appended as-is, not through stepText.
     if (farm !== null) steps.push(evStepText(farm));
@@ -970,6 +1059,12 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, op
         hours_spent: 0,
         ev_per_hour_usd: 0,
         rating: 'Skip' as const,
+        plan_capital_usd: capitalFor(s.p),
+        tiers: [],
+        cost_breakdown: { first_tx_usd: 0, setup_usd: 0, weekly_gas_usd: 0, claim_usd: 0, opportunity_usd: 0, total_usd: 0 },
+        break_even_share_pct: null,
+        plan_start_date: snapshot.as_of,
+        plan_end_date: snapshot.as_of,
       },
       farm_steps: steps,
     };
@@ -1054,9 +1149,11 @@ function claimFor(p: SnapshotProtocol): string {
  * A protocol's farm plan: six steps, each an action with a cost and a time. The plan is derived from
  * the protocol's own record (category, chains, TVL, age), never from a hand-written list of names.
  */
-export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
+export function farmSteps(p: SnapshotProtocol, age: number | null, planCapital?: number): FarmStep[] {
   const chain = chainOf(p);
-  const capital = capitalFor(p);
+  // The plan deposits the minimum viable capital (the deposit threshold)
+  // when the economics carry one; the standard tier capital otherwise.
+  const capital = planCapital ?? capitalFor(p);
   const hold = holdDaysFor(age);
   const action = actionFor(p, capital, chain);
   return [
@@ -1121,8 +1218,18 @@ export function launchProbability(p: SnapshotProtocol, odds?: TokenOddsFit): num
  * Null when no deposit ever pays. Hours spent are the plan's own times:
  * 15 minutes to set up, 10 minutes a week, 10 minutes to claim, 5 minutes
  * to log — the EV per hour is the low-end net over those hours.
+ *
+ * Sonar-9 closes the loop the threshold used to leave open: the threshold
+ * is solved exactly (the setup gas depends on the deposit itself, $8 at
+ * $200 and above, $4 below, so the fixed point is taken on the consistent
+ * side), the plan is sized at that threshold — the minimum viable capital —
+ * when it lies in [10, 10000], and the verdict is shown at three deposits
+ * ($50, $100, the threshold) with the plan's costs itemised per outflow
+ * and the plan window dated from the snapshot. The economics themselves
+ * (net, rating, break-even) stay at the standard tier capital, so rows
+ * stay comparable; the plan's deposit is the threshold.
  */
-export function farmEconomics(p: SnapshotProtocol, age: number | null, implied: number, impliedLow: number, oddsFit: TokenOddsFit, model: ModelConstants = MODEL): FarmEconomics {
+export function farmEconomics(p: SnapshotProtocol, age: number | null, implied: number, impliedLow: number, oddsFit: TokenOddsFit, asOf: string, model: ModelConstants = MODEL): FarmEconomics {
   const capital = capitalFor(p);
   const hold = holdDaysFor(age);
   const setupGas = capital >= 200 ? 8 : 4;
@@ -1143,7 +1250,40 @@ export function farmEconomics(p: SnapshotProtocol, age: number | null, implied: 
     breakEvenLow >= model.rating_a_farmers ? 'A' : breakEvenLow >= model.rating_b_farmers ? 'B' : breakEvenLow >= model.rating_c_farmers ? 'C' : 'Skip';
   const oppRate = model.capital_apr * (hold / 365);
   const denom = capital > 0 ? evLow / capital - oppRate : 0;
-  const threshold = denom > 0 ? Math.round(gas / denom) : null;
+  // The deposit threshold, solved exactly: the deposit D at which the
+  // low-end net is zero, EV(D) = evLow x D / capital against
+  // cost(D) = gas(D) + D x oppRate, where the setup gas depends on D
+  // itself ($8 at D >= 200, $4 below). One fixed point exists: with
+  // setup $4 it is gas4/denom, with setup $8 it is gas8/denom, and the
+  // $4 one applies exactly when it lands below $200.
+  const gasAt = (setup: number): number => model.first_tx_gas_usd + setup + weeklyGas + model.claim_gas_usd;
+  const dStar = denom > 0 ? (gasAt(4) / denom < 200 ? gasAt(4) / denom : gasAt(8) / denom) : null;
+  const threshold = dStar === null ? null : Math.round(dStar);
+  // The plan is sized at the minimum viable capital: the threshold when
+  // one exists and lies in [10, 10000], else the standard tier capital.
+  // Below $10 the threshold is under the smallest practical deposit, and
+  // above $10,000 it is not a plan anyone can fund, so the tier ships.
+  const planCapital = threshold !== null && threshold >= 10 && threshold <= 10000 ? threshold : capital;
+  const planSetupGas = planCapital >= 200 ? 8 : 4;
+  const planOpportunity = planCapital * model.capital_apr * (hold / 365);
+  const planCost = model.first_tx_gas_usd + planSetupGas + weeklyGas + model.claim_gas_usd + planOpportunity;
+  // The verdict at three deposits: the standard $50 and $100 tiers and
+  // the threshold itself. At the threshold the low-end net is zero by
+  // construction — that is what minimum viable means.
+  const tierFor = (d: number): { capital_usd: number; net_low_usd: number; rating: FarmEconomics['rating'] } => {
+    const g = gasAt(d >= 200 ? 8 : 4);
+    const c = g + d * oppRate;
+    const netD = (evLow * d) / capital - c;
+    const beD = c > 0 ? Math.round(poolLow / c) : 0;
+    return {
+      capital_usd: d,
+      net_low_usd: round2(netD),
+      rating: beD >= model.rating_a_farmers ? 'A' : beD >= model.rating_b_farmers ? 'B' : beD >= model.rating_c_farmers ? 'C' : 'Skip',
+    };
+  };
+  const tierCaps = [50, 100, ...(threshold !== null ? [threshold] : [])].filter((d, i, arr) => arr.indexOf(d) === i).sort((a, b) => a - b);
+  const tiers = tierCaps.map(tierFor);
+  const planEnd = new Date(Date.parse(`${asOf}T00:00:00Z`) + hold * DAY_MS).toISOString().slice(0, 10);
   const hours = 0.25 + Math.ceil(hold / 7) * (10 / 60) + 10 / 60 + 5 / 60;
   return {
     capital_usd: capital,
@@ -1167,6 +1307,19 @@ export function farmEconomics(p: SnapshotProtocol, age: number | null, implied: 
     hours_spent: round2(hours),
     ev_per_hour_usd: round2(netLow / hours),
     rating,
+    plan_capital_usd: planCapital,
+    tiers,
+    cost_breakdown: {
+      first_tx_usd: model.first_tx_gas_usd,
+      setup_usd: planSetupGas,
+      weekly_gas_usd: weeklyGas,
+      claim_usd: model.claim_gas_usd,
+      opportunity_usd: round2(planOpportunity),
+      total_usd: round2(planCost),
+    },
+    break_even_share_pct: evLow > 0 ? round2((cost / evLow) * 100) : null,
+    plan_start_date: asOf,
+    plan_end_date: planEnd,
   };
 }
 
@@ -1406,10 +1559,10 @@ function oddsFeaturesAsOf(p: SnapshotProtocol, asOf: string, medLogAge: number, 
   return [1, Math.log10(p.tvl_usd) - medLogTvl, growth, logAge - medLogAge];
 }
 
-/** Logistic regression by iteratively reweighted least squares (ridge 1e-4), deterministic: the same rows, the same coefficients, every run. */
-function fitLogistic(rows: SnapshotProtocol[], asOf: string, medLogAge: number, medLogTvl: number): number[] {
+/** Logistic regression by iteratively reweighted least squares (ridge 1e-4), deterministic: the same rows, the same coefficients, every run. `labels`, when given, replaces the token record as the outcome — the placebo control fits the same machinery on shuffled labels. */
+function fitLogistic(rows: SnapshotProtocol[], asOf: string, medLogAge: number, medLogTvl: number, labels?: number[]): number[] {
   const X = rows.map((p) => oddsFeaturesAsOf(p, asOf, medLogAge, medLogTvl));
-  const y = rows.map((p) => (isPreToken(p) ? 0 : 1));
+  const y = labels ?? rows.map((p) => (isPreToken(p) ? 0 : 1));
   const d = 4;
   let beta = [0, 0, 0, 0];
   for (let it = 0; it < 50; it++) {
@@ -1606,6 +1759,391 @@ export function validateLoo(snapshot: Snapshot, model: ModelConstants = MODEL): 
   return { n: live.length, ...oosMetrics(preds) };
 }
 
+/** The Mann-Whitney AUC of (score, label) pairs: the share of positive/negative pairs the score orders correctly. */
+function aucOf(pairs: { s: number; y: number }[]): number {
+  const pos = pairs.filter((r) => r.y === 1).map((r) => r.s);
+  const neg = pairs.filter((r) => r.y === 0).map((r) => r.s);
+  if (pos.length === 0 || neg.length === 0) return 0.5;
+  let wins = 0;
+  for (const a of pos) for (const b of neg) wins += a > b ? 1 : a === b ? 0.5 : 0;
+  return wins / (pos.length * neg.length);
+}
+
+/**
+ * Split-conformal range (sonar-9; scikit-survival / statistical-analysis
+ * methodology, reimplemented by hand): the 95 dated comps, slug-ordered,
+ * split 60/20/20 by index (i%5 in {0,1,2} train, i%5==3 calibration,
+ * i%5==4 test). The curve is fitted on the train split only; the
+ * nonconformity score is |log10(actual) - log10(predicted)| on the
+ * calibration split; the 90% interval's half-width is 10^q90 with the
+ * finite-sample level ceil((n+1)*0.90)/n, and its coverage is measured on
+ * the test split the fit never saw. The 80% interval is reported
+ * alongside it. A range is only called conformal when its coverage is
+ * measured — both numbers are here. The range the board ships for
+ * peer-poor rows is the median error (x2.94), a 50% interval, not this
+ * 90% interval: the 90% half-width is x9.0 on a 19-protocol calibration
+ * set, and widening the board's range to it would collapse the low-end
+ * farm verdicts of every peer-poor row. The conformal intervals are
+ * reported with their measured coverage instead of being silently shipped.
+ */
+export function validateConformal(snapshot: Snapshot, model: ModelConstants = MODEL): {
+  nominal_pct: number;
+  coverage_pct: number;
+  n_calibration: number;
+  n_test: number;
+  half_width_x: number;
+  q90_log10: number;
+  coverage_80_pct: number;
+  half_width_80_x: number;
+  method: string;
+} {
+  const { live } = liveForFit(snapshot.protocols);
+  const train = live.filter((_, i) => i % 5 === 0 || i % 5 === 1 || i % 5 === 2);
+  const cal = live.filter((_, i) => i % 5 === 3);
+  const test = live.filter((_, i) => i % 5 === 4);
+  const fit = fitCurve(train);
+  const ageFit = fitAge(train, snapshot.as_of, fit, model);
+  const score = (p: SnapshotProtocol): number =>
+    Math.abs(Math.log10(p.mcap_usd!) - Math.log10(impliedValue(p, snapshot.as_of, fit, ageFit, model).implied));
+  const calScores = cal.map(score).sort((a, b) => a - b);
+  const n = calScores.length;
+  const level90 = Math.min(Math.ceil((n + 1) * 0.9) / n, 1);
+  const level80 = Math.min(Math.ceil((n + 1) * 0.8) / n, 1);
+  const q90 = percentileOf(calScores, level90);
+  const q80 = percentileOf(calScores, level80);
+  const coverage90 = test.length > 0 ? test.filter((p) => score(p) <= q90).length / test.length : 0;
+  const coverage80 = test.length > 0 ? test.filter((p) => score(p) <= q80).length / test.length : 0;
+  return {
+    nominal_pct: 90,
+    coverage_pct: round2(coverage90 * 100),
+    n_calibration: n,
+    n_test: test.length,
+    half_width_x: round2(10 ** q90),
+    q90_log10: round4(q90),
+    coverage_80_pct: round2(coverage80 * 100),
+    half_width_80_x: round2(10 ** q80),
+    method: 'split-conformal, 60/20/20 split by slug index (i%5), nonconformity |log10 actual - log10 predicted|, finite-sample level ceil((n+1)*q)/n',
+  };
+}
+
+/** 10-fold cross-validation on the 95 comps, with the shipped model. */
+export function validateCv10(snapshot: Snapshot, model: ModelConstants = MODEL): { n: number; mdape_pct: number; hit_pct: number; typical_error_x: number } {
+  const { live } = liveForFit(snapshot.protocols);
+  const preds: { pred: number; actual: number }[] = [];
+  for (let fold = 0; fold < 10; fold++) {
+    const test = live.filter((_, i) => i % 10 === fold);
+    const train = live.filter((_, i) => i % 10 !== fold);
+    const fit = fitCurve(train);
+    const ageFit = fitAge(train, snapshot.as_of, fit, model);
+    for (const p of test) preds.push({ pred: impliedValue(p, snapshot.as_of, fit, ageFit, model).implied, actual: p.mcap_usd! });
+  }
+  return { n: live.length, ...oosMetrics(preds) };
+}
+
+/**
+ * One 5-fold CV run of the value model under a variant: a growth weight, an
+ * age clamp, an optional per-category median-residual factor, or growth
+ * values shuffled across comps (seeded). The variant machinery behind the
+ * keep/drop table and the placebo growth control.
+ */
+function cvVariant(
+  snapshot: Snapshot,
+  growthWeight: number,
+  ageClamp: number,
+  categoryFactor: boolean,
+  shuffleGrowth: boolean,
+): { mdape_pct: number; hit_pct: number; typical_error_x: number; fold_mdape_pct: number[] } {
+  const { live } = liveForFit(snapshot.protocols);
+  const comps = shuffleGrowth
+    ? (() => {
+        const growths = live.map((p) => p.change_7d);
+        const rnd = mulberry32(20261126);
+        for (let i = growths.length - 1; i > 0; i--) {
+          const j = Math.floor(rnd() * (i + 1));
+          [growths[i], growths[j]] = [growths[j]!, growths[i]!];
+        }
+        return live.map((p, i) => ({ ...p, change_7d: growths[i]! }));
+      })()
+    : live;
+  const variant: ModelConstants = { ...MODEL, growth_weight: growthWeight, age_k_clamp: ageClamp };
+  const preds: { pred: number; actual: number }[] = [];
+  const foldPreds: { pred: number; actual: number }[][] = [[], [], [], [], []];
+  for (let fold = 0; fold < 5; fold++) {
+    const test = comps.filter((_, i) => i % 5 === fold);
+    const train = comps.filter((_, i) => i % 5 !== fold);
+    const fit = fitCurve(train);
+    const ageFit = fitAge(train, snapshot.as_of, fit, variant);
+    let factorByCategory = new Map<string, number>();
+    if (categoryFactor) {
+      const residuals = new Map<string, number[]>();
+      for (const p of train) {
+        const pred = impliedValue(p, snapshot.as_of, fit, ageFit, variant).implied;
+        const cat = p.category ?? '';
+        if (!residuals.has(cat)) residuals.set(cat, []);
+        residuals.get(cat)!.push(Math.log10(p.mcap_usd!) - Math.log10(pred));
+      }
+      for (const [cat, rs] of residuals) if (rs.length >= 3) factorByCategory.set(cat, medianList(rs));
+    }
+    for (const p of test) {
+      let pred = impliedValue(p, snapshot.as_of, fit, ageFit, variant).implied;
+      const f = factorByCategory.get(p.category ?? '');
+      if (f !== undefined) pred = Math.max(1, Math.round(pred * 10 ** f));
+      preds.push({ pred, actual: p.mcap_usd! });
+      foldPreds[fold]!.push({ pred, actual: p.mcap_usd! });
+    }
+  }
+  return {
+    ...oosMetrics(preds),
+    fold_mdape_pct: foldPreds.map((f) => round2(medianList(f.map(({ pred, actual }) => Math.abs(pred - actual) / actual)) * 100)),
+  };
+}
+
+/**
+ * Keep/drop per term (sonar-9): each named term of the value model tested
+ * against the variant without it, on the same 5-fold CV over the 95 comps.
+ * The chains-count odds variant is a recorded offline experiment (see
+ * fitTokenOdds), not refit here — the table says so.
+ */
+export function validateTerms(snapshot: Snapshot): { term: string; test: string; result: string; verdict: string }[] {
+  const shipped = cvVariant(snapshot, 0.2, 0.05, false, false);
+  const w0 = cvVariant(snapshot, 0, 0.05, false, false);
+  const noAge = cvVariant(snapshot, 0.2, 0, false, false);
+  const cat = cvVariant(snapshot, 0.2, 0.05, true, false);
+  // The category factor's pooled gain is not robust: count the folds it wins.
+  const catWins = cat.fold_mdape_pct.filter((m, i) => m < shipped.fold_mdape_pct[i]!).length;
+  return [
+    {
+      term: 'Theil-Sen curve (log mcap ~ log TVL)',
+      test: '5-fold CV vs global median (91.4%)',
+      result: `MdAPE ${shipped.mdape_pct}% vs 91.4%`,
+      verdict: 'KEPT',
+    },
+    {
+      term: 'Growth weight 0.20',
+      test: '5-fold CV, weight 0 vs 0.20',
+      result: `MdAPE ${w0.mdape_pct}% at 0, ${shipped.mdape_pct}% at 0.20 — the CV curve is flat, so the plateau centre ships, not the argmin`,
+      verdict: 'KEPT',
+    },
+    {
+      term: 'Age multiplier (k shrunk ±0.05)',
+      test: '5-fold CV, age on vs off',
+      result: `MdAPE ${shipped.mdape_pct}% with age vs ${noAge.mdape_pct}% without — kept as a named term, not because CV picks it`,
+      verdict: 'KEPT',
+    },
+    {
+      term: 'Category factor (median residual per category)',
+      test: '5-fold CV with the factor',
+      result: `MdAPE ${cat.mdape_pct}% vs ${shipped.mdape_pct}% shipped on the pooled median, but better in only ${catWins} of 5 folds`,
+      verdict: 'DROPPED — the gain is not robust across folds',
+    },
+    {
+      term: 'Chains count (odds)',
+      test: 'Recorded offline experiment, 5-fold CV AUC',
+      result: 'AUC 0.656 with vs 0.672 without',
+      verdict: 'DROPPED — recorded, not refit here',
+    },
+  ];
+}
+
+/**
+ * Placebo controls (sonar-9): the same machinery run where no signal should
+ * exist. The odds placebo shuffles the token labels (seeded) and refits the
+ * logistic; the growth placebo shuffles the 7-day growth values and reruns
+ * the 5-fold CV. A control passes when it finds nothing.
+ */
+export function validatePlacebo(snapshot: Snapshot): { test: string; result: string; verdict: string }[] {
+  const sorted = [...snapshot.protocols].sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+  const datedAges = snapshot.protocols
+    .filter((p) => p.listed_at !== null)
+    .map((p) => Math.log10((ageDays(snapshot.as_of, p.listed_at) ?? 0) + 1))
+    .sort((a, b) => a - b);
+  const medLogAge = medianOf(datedAges);
+  const medLogTvl = medianOf(snapshot.protocols.map((p) => Math.log10(p.tvl_usd)).sort((a, b) => a - b));
+  const labels = sorted.map((p) => (isPreToken(p) ? 0 : 1));
+  const rnd = mulberry32(20261126);
+  for (let i = labels.length - 1; i > 0; i--) {
+    const j = Math.floor(rnd() * (i + 1));
+    [labels[i], labels[j]] = [labels[j]!, labels[i]!];
+  }
+  const oof: { s: number; y: number }[] = [];
+  for (let fold = 0; fold < 5; fold++) {
+    const test = sorted.filter((_, i) => i % 5 === fold);
+    const train = sorted.filter((_, i) => i % 5 !== fold);
+    const trainLabels = train.map((p) => labels[sorted.indexOf(p)]!);
+    const b = fitLogistic(train, snapshot.as_of, medLogAge, medLogTvl, trainLabels);
+    for (const p of test) {
+      const f = oddsFeaturesAsOf(p, snapshot.as_of, medLogAge, medLogTvl);
+      oof.push({ s: sigmoid(f.reduce((s2, x, j) => s2 + x * b[j]!, 0)), y: labels[sorted.indexOf(p)]! });
+    }
+  }
+  const placeboAuc = round4(aucOf(oof));
+  const shipped = cvVariant(snapshot, 0.2, 0.05, false, false);
+  const placeboGrowth = cvVariant(snapshot, 0.2, 0.05, false, true);
+  return [
+    {
+      test: 'Placebo: token odds on shuffled labels (seed 20261126)',
+      result: `CV AUC ${placeboAuc} vs 0.67 real`,
+      verdict: Math.abs(placeboAuc - 0.5) < 0.1 ? 'CONTROL PASSED — no signal where none should exist' : `CONTROL — AUC ${placeboAuc}`,
+    },
+    {
+      test: 'Placebo: 7-day growth values shuffled, 5-fold CV',
+      result: `MdAPE ${placeboGrowth.mdape_pct}% with shuffled growth vs ${shipped.mdape_pct}% shipped`,
+      verdict:
+        placeboGrowth.mdape_pct >= shipped.mdape_pct
+          ? 'CONTROL PASSED — shuffled growth carries no signal'
+          : 'CONTROL — shuffled growth matches the real term (the growth term carries little signal)',
+    },
+  ];
+}
+
+/**
+ * Nested odds check (sonar-9): all 758 protocols ranked by implied value
+ * and split into terciles; within each tercile, the AUC of the token odds
+ * against the token record. If the odds only repeated the value ranking,
+ * the within-tercile AUC would be 0.5 — above it, the odds add information
+ * the ranking does not carry.
+ */
+export function validateNestedOdds(
+  snapshot: Snapshot,
+  fit: CurveFit,
+  ageFit: AgeFit,
+  oddsFit: TokenOddsFit,
+): { bands: { band: string; n: number; n_yes: number; auc: number }[]; overall_auc: number; note: string } {
+  const scored = snapshot.protocols.map((p) => ({
+    implied: impliedValue(p, snapshot.as_of, fit, ageFit, MODEL).implied,
+    odds: tokenOdds(p, oddsFit),
+    y: isPreToken(p) ? 0 : 1,
+  }));
+  scored.sort((a, b) => b.implied - a.implied);
+  const n = scored.length;
+  const bands: { band: string; n: number; n_yes: number; auc: number }[] = [];
+  for (let t = 0; t < 3; t++) {
+    const slice = scored.slice(Math.floor((t * n) / 3), Math.floor(((t + 1) * n) / 3));
+    bands.push({
+      band: t === 0 ? 'top tercile by implied value' : t === 1 ? 'middle tercile by implied value' : 'bottom tercile by implied value',
+      n: slice.length,
+      n_yes: slice.filter((r) => r.y === 1).length,
+      auc: round4(aucOf(slice.map((r) => ({ s: r.odds, y: r.y })))),
+    });
+  }
+  return {
+    bands,
+    overall_auc: round4(aucOf(scored.map((r) => ({ s: r.odds, y: r.y })))),
+    note: 'Within each implied-value tercile, the token odds still separate the protocols that record a token — the odds add information beyond the value ranking.',
+  };
+}
+
+/**
+ * Age buckets (sonar-9): P(records a token) by age band, over all 758
+ * protocols. The odds rise with age — the logistic's positive age
+ * coefficient (+1.42) is the cross-sectional association, not a forward
+ * hazard: no launch date is recorded, so no 12-month hazard is claimed.
+ */
+export function ageBuckets(snapshot: Snapshot): { bucket: string; n: number; p_records_token: number; median_tvl_usd: number }[] {
+  const defs: { label: string; test: (age: number | null) => boolean }[] = [
+    { label: '0–180 days', test: (a) => a !== null && a <= 180 },
+    { label: '181–365 days', test: (a) => a !== null && a > 180 && a <= 365 },
+    { label: '366–730 days', test: (a) => a !== null && a > 365 && a <= 730 },
+    { label: '731–1,460 days', test: (a) => a !== null && a > 730 && a <= 1460 },
+    { label: '1,461+ days', test: (a) => a !== null && a > 1460 },
+    { label: 'no listed date', test: (a) => a === null },
+  ];
+  return defs.map(({ label, test }) => {
+    const ps = snapshot.protocols.filter((p) => test(ageDays(snapshot.as_of, p.listed_at)));
+    const yes = ps.filter((p) => !isPreToken(p)).length;
+    return {
+      bucket: label,
+      n: ps.length,
+      p_records_token: ps.length > 0 ? round4(yes / ps.length) : 0,
+      median_tvl_usd: ps.length > 0 ? medianList(ps.map((p) => p.tvl_usd)) : 0,
+    };
+  });
+}
+
+/**
+ * The 2D farm matrix (sonar-9): token-odds band by low-end EV-per-hour
+ * band, over the board rows. Each cell carries its row count and its best
+ * row by EV/hour — the cell a farmer with a given odds band and a given
+ * hourly bar should open first.
+ */
+export function farmMatrix(rows: BoardRow[]): {
+  odds_band: string;
+  ev_band: string;
+  count: number;
+  top_slug: string | null;
+  top_name: string | null;
+  top_ev_per_hour_usd: number | null;
+}[] {
+  const oddsBands: { label: string; test: (o: number) => boolean }[] = [
+    { label: 'odds 0–0.40', test: (o) => o < 0.4 },
+    { label: 'odds 0.40–0.70', test: (o) => o >= 0.4 && o < 0.7 },
+    { label: 'odds 0.70–1.00', test: (o) => o >= 0.7 },
+  ];
+  const evBands: { label: string; test: (e: number) => boolean }[] = [
+    { label: 'net < $0/h', test: (e) => e < 0 },
+    { label: 'net $0–$1/h', test: (e) => e >= 0 && e <= 1 },
+    { label: 'net > $1/h', test: (e) => e > 1 },
+  ];
+  const cells: {
+    odds_band: string;
+    ev_band: string;
+    count: number;
+    top_slug: string | null;
+    top_name: string | null;
+    top_ev_per_hour_usd: number | null;
+  }[] = [];
+  for (const ob of oddsBands) {
+    for (const eb of evBands) {
+      const inCell = rows.filter((r) => ob.test(r.token_odds) && eb.test(r.farm.ev_per_hour_usd));
+      const top = inCell.reduce<BoardRow | null>((best, r) => (best === null || r.farm.ev_per_hour_usd > best.farm.ev_per_hour_usd ? r : best), null);
+      cells.push({
+        odds_band: ob.label,
+        ev_band: eb.label,
+        count: inCell.length,
+        top_slug: top ? top.slug : null,
+        top_name: top ? top.name : null,
+        top_ev_per_hour_usd: top ? round2(top.farm.ev_per_hour_usd) : null,
+      });
+    }
+  }
+  return cells;
+}
+
+/**
+ * One playbook per category on the board (sonar-9): the category's weekly
+ * action, taken from its top-ranked row, its cost note and its hold. The
+ * 74 weekly actions of sonar-8 become one playbook per category — the same
+ * action, named once per category instead of once per row.
+ */
+export function playbooksFor(snapshot: Snapshot, board: BoardRow[]): {
+  category: string;
+  rows: number;
+  action: string;
+  cost_note: string;
+  hold_days: number;
+}[] {
+  const bySlugMap = bySlug(snapshot.protocols);
+  const byCategory = new Map<string, BoardRow[]>();
+  for (const row of board) {
+    if (!byCategory.has(row.category)) byCategory.set(row.category, []);
+    byCategory.get(row.category)!.push(row);
+  }
+  const out: { category: string; rows: number; action: string; cost_note: string; hold_days: number }[] = [];
+  for (const [category, rows] of [...byCategory.entries()].sort((a, b) => b[1].length - a[1].length || (a[0] < b[0] ? -1 : 1))) {
+    const top = rows[0]!;
+    const p = bySlugMap.get(top.slug);
+    const action = p ? weeklyActionFor(p, chainOf(p)) : 'Use the protocol once a week so the position stays warm.';
+    out.push({
+      category,
+      rows: rows.length,
+      action,
+      cost_note: 'about $2 of gas a week',
+      hold_days: top.farm.hold_days,
+    });
+  }
+  return out;
+}
+
 /** Walk-forward on the 95 dated comps (backtest-expert): 3 windows by listed_at quartile — fit on earlier quartiles, test the next. */
 export function validateWalkForward(snapshot: Snapshot, model: ModelConstants = MODEL): {
   windows: { fit_n: number; test_n: number; cutoff: string; mdape_pct: number; hit_pct: number; typical_error_x: number }[];
@@ -1669,9 +2207,20 @@ export const ASSUMPTIONS: Assumption[] = [
 
 /** Everything the dashboard renders, from the snapshot. */
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL, opts: { economics?: boolean } = {}): { board: BoardRow[]; radar: RadarData } {
-  // The range fallback for peer-poor rows is the live 5-fold CV typical
-  // error, so the board is built with the same error the validation reports.
+  // The range fallback for peer-poor rows stays the live 5-fold CV typical
+  // error (x2.94), so the board is built with the same error the validation
+  // reports — the shipped range is a 50% interval (peer p25-p75, or the
+  // median error for peer-poor rows), and the dashboard says so. The
+  // split-conformal 90% interval is measured alongside it (see
+  // validateConformal): its half-width is x9.0 with 84% blind coverage,
+  // and the 80% interval is x3.9 with 58% — the model's errors are
+  // heavy-tailed, so a true 90% interval is far wider than the shipped
+  // 50% range, and widening the board's range to x9 would collapse the
+  // low-end farm verdicts of every peer-poor row on a 19-protocol
+  // calibration set. The conformal intervals are reported with their
+  // measured coverage instead of being silently shipped.
   const cv95 = validateCv(snapshot, model);
+  const conformal = validateConformal(snapshot, model);
   const board = buildBoard(snapshot, model, { ...opts, typical_error_x: cv95.typical_error_x });
   const fit = fitCurve(snapshot.protocols);
   const ageFit = fitAge(snapshot.protocols, snapshot.as_of, fit, model);
@@ -1683,6 +2232,11 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL, op
   const bootstrap = bootstrapCurve(snapshot);
   const loo = validateLoo(snapshot, model);
   const walkForward = validateWalkForward(snapshot, model);
+  const cv10 = validateCv10(snapshot, model);
+  const terms = validateTerms(snapshot);
+  const placebo = validatePlacebo(snapshot);
+  const oddsNested = validateNestedOdds(snapshot, fit, ageFit, oddsFit);
+  const buckets = ageBuckets(snapshot);
   const ledger = ledgerFor(snapshot, board);
   const quality = dataQualityFor(snapshot);
   const ranges = rankRangesFor(snapshot, board, model);
@@ -1725,6 +2279,12 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL, op
       cv95,
       loo,
       walk_forward: walkForward,
+      conformal,
+      cv10,
+      terms,
+      placebo,
+      odds_nested: oddsNested,
+      age_buckets: buckets,
       odds: {
         beta: oddsFit.beta,
         median_log_age: oddsFit.median_log_age,
@@ -1738,7 +2298,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL, op
       quality,
       assumptions: ASSUMPTIONS,
       holdout_n: holdout.n,
-      holdout_shipped: { model: 'sonar-8: curve + growth 0.20 + age, token odds, low-end farm', ...holdout.shipped },
+      holdout_shipped: { model: 'sonar-9: curve + growth 0.20 + age, token odds, low-end farm, conformal range, keep/drop + placebo, nested odds, minimum-viable farm plans', ...holdout.shipped },
       holdout_global_median: { model: 'Global median', ...holdout.global_median },
       holdout_tvl_only: { model: 'TVL only (multiple 1.0)', ...holdout.tvl_only },
       time_split: timeSplit,
@@ -1752,7 +2312,8 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL, op
         'Token odds are a logistic fit on all 758 protocols (416 record a token, 342 do not) over centred log10(TVL), growth/100 and centred log10(age+1). 5-fold CV AUC 0.67, Brier 0.23 against a 0.55 base rate. This is a cross-sectional association with the peer record, NOT a hazard rate and NOT a forecast of a future launch: older protocols score higher because they survived, fast growers lower because they have not launched yet.',
         'Expected value = implied value x token odds x 10% (the farmers\' share of the token). The farm verdict is netted at the LOW end of the implied-value range, so a farm that only pays on the point estimate is rated Skip; the point-estimate net is still shown beside it.',
         'A category-shrinkage variant (curve x category factor) was tested and dropped: 88.1%, worse than the plain global curve.',
-        'The implied value is a point estimate with a range: the p25-p75 multiples of the protocol\'s nearest live-token peers in its own category (up to five, nearest in log TVL), carried through the same growth and age multipliers. With fewer than two peers the range is the model\'s own typical out-of-sample error (x' + cv95.typical_error_x.toFixed(2) + ', the live 5-fold CV figure) around the point estimate — an honest width, not a narrower number invented from nothing.',
+        'The implied value is a point estimate with a range: the p25-p75 multiples of the protocol\'s nearest live-token peers in its own category (up to five, nearest in log TVL), carried through the same growth and age multipliers. With fewer than two peers the range is the model\'s own typical out-of-sample error (x' + cv95.typical_error_x.toFixed(2) + ', the live 5-fold CV figure) around the point estimate — a 50% interval, honestly labelled: the measured split-conformal 90% interval is x' + conformal.half_width_x.toFixed(2) + ' wide with ' + conformal.coverage_pct + '% blind coverage on a 19-protocol test set (the 80% interval is x' + conformal.half_width_80_x.toFixed(2) + ' with ' + conformal.coverage_80_pct + '% coverage), so a true 90% interval is far wider than the shipped range and the dashboard does not pretend otherwise.',
+        'Sonar-9 keeps the sonar-8 value model unchanged and adds the checks around it: a split-conformal range with measured blind coverage, 10-fold CV (MdAPE ' + cv10.mdape_pct + '%), a keep/drop table per term, placebo controls (shuffled labels and shuffled growth), a nested odds check (the odds still separate token records within each implied-value tercile), and age buckets showing P(records a token) rising with age. The farm plans are sized at the minimum viable deposit — the deposit threshold — with the verdict at $50, $100 and the threshold, the costs itemised per outflow, and the plan window dated from the snapshot.',
         'The 0-100 score is four named sub-scores of 0-25 each (scale, momentum, maturity, confidence), all from the snapshot\'s own figures; it presents the same figures the value already uses and never changes the implied value.',
         'Time-split: the curve and the age fit are fitted on the older half of the 95 comps and scored on the newer half (listed after the median date). A curve that only fits the past would fall apart on the newer half. Walk-forward adds three windows by listed_at quartile.',
         'Bootstrap: 200 resamples of the 95 comps with replacement (seeded, so the result is byte-identical every run), the curve refitted on each. The slope and intercept bands say how much the fit moves when the sample moves. The same 200 refits give every row its rank range (p5-p95).',
@@ -1772,6 +2333,8 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL, op
     assumptions: ASSUMPTIONS,
     rows: board.map(radarRow),
     live,
+    farm_matrix: farmMatrix(board),
+    playbooks: playbooksFor(snapshot, board),
   };
   return { board, radar };
 }

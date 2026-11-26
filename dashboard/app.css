@@ -243,3 +243,23 @@ tr.top3 .rank-dot { background: var(--accent); color: #FFFFFF; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
 }
+
+/* Sonar-9: self-check panel, farm matrix, playbooks, model extras. */
+.selfcheck, .matrix, .playbooks { padding: var(--s5); margin-top: var(--s4); }
+.selfcheck h2, .matrix h2, .playbooks h2 { font-size: 20px; margin-bottom: var(--s2); }
+.selfcheck .sub, .matrix .sub, .playbooks .sub { margin-bottom: var(--s3); }
+.checks { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--s3) var(--s4); }
+.checks li { display: grid; grid-template-columns: auto 1fr; column-gap: var(--s2); font-size: 13px; align-items: start; }
+.checks .mark { grid-row: 1 / 3; font-weight: 700; color: var(--accent); }
+.checks li.fail .mark { color: var(--negative); }
+.checks .check-label { grid-column: 2; color: var(--muted); }
+.checks b { grid-column: 2; margin-left: 0; text-align: left; font-family: var(--font-num); white-space: normal; }
+.matrix .mini-table td b, .playbooks .mini-table td b { display: block; }
+.matrix .mini-table td .sub, .playbooks .mini-table td .sub { display: block; }
+#conformal-note, #nested-note { margin-top: var(--s4); }
+#conformal-note h3, #nested-note h3 { font-size: 15px; margin-bottom: var(--s2); }
+#conformal-note p, #nested-note p { font-size: 13px; max-width: 78ch; }
+#terms-table, #age-table { margin-top: var(--s4); }
+@media (max-width: 900px) {
+  .checks { grid-template-columns: 1fr; }
+}
